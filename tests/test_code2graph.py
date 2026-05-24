@@ -62,6 +62,84 @@ export const main = () => {
     assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:app.ts:helper" for edge in graph["edges"])
 
 
+def test_typescript_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function direct() {
+  return 1;
+}
+
+export function qualified() {
+  return 2;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { direct as renamed } from "./helpers";
+import * as helpers from "./helpers";
+
+export function main() {
+  renamed();
+  helpers.qualified();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:renamed", "js:call:helpers.qualified"} for node in graph["nodes"])
+
+
+def test_javascript_require_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.js").write_text(
+        """
+function direct() {
+  return 1;
+}
+
+function qualified() {
+  return 2;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+const { direct: directAlias } = require("./helpers");
+const helpers = require("./helpers");
+
+function main() {
+  directAlias();
+  helpers.qualified();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:directAlias", "js:call:helpers.qualified"} for node in graph["nodes"])
+
+
 def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
