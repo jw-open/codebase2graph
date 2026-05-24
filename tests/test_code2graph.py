@@ -207,6 +207,85 @@ function main() {
     assert not any(node["id"] in {"js:call:directAlias", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_javascript_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.js").write_text(
+        """
+function imported() {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+const { imported } = require("./helpers");
+
+function local() {
+  return 2;
+}
+
+function main() {
+  const localAlias = local;
+  const importedAlias = imported;
+  localAlias();
+  importedAlias();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:app.js:local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:imported"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:localAlias", "js:call:importedAlias"} for node in graph["nodes"])
+
+
+def test_javascript_ambiguous_function_alias_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "app.js").write_text(
+        """
+function first() {
+  return 1;
+}
+
+function second() {
+  return 2;
+}
+
+function main(first, flag) {
+  const paramAlias = first;
+  let alias = first;
+  if (flag) {
+    alias = second;
+  }
+  first();
+  paramAlias();
+  alias();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(edge["from"] == "js:function:app.js:main" and edge["to"] == "js:call:first" for edge in graph["edges"])
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:call:paramAlias"
+        for edge in graph["edges"]
+    )
+    assert any(edge["from"] == "js:function:app.js:main" and edge["to"] == "js:call:alias" for edge in graph["edges"])
+    assert not any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:app.js:first"
+        for edge in graph["edges"]
+    )
+
+
 def test_typescript_this_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
     (tmp_path / "service.ts").write_text(
         """

@@ -20,6 +20,16 @@ JS_REQUIRE_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*require\(['\"](?P<module>[^'\"]+)['\"]\)",
     re.M,
 )
+JS_ALIAS_DECL_RE = re.compile(
+    r"^\s*(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
+    re.M,
+)
+JS_ALIAS_ASSIGN_RE = re.compile(
+    r"^\s*(?!const\b|let\b|var\b)(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
+    re.M,
+)
 JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 JS_KEYWORDS = {
     "if",
@@ -59,7 +69,11 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             continue
         rel = path.relative_to(root).as_posix()
         text = read_text(path)
-        matches = list(JS_FUNC_RE.finditer(text))
+        matches = [
+            match
+            for match in JS_FUNC_RE.finditer(text)
+            if (next((group for group in match.groups() if group), None) not in JS_KEYWORDS)
+        ]
         files.append((path, rel, text, matches))
         for module_key in _javascript_module_keys(root, path):
             module_index.setdefault(module_key, set()).add(path)
@@ -90,6 +104,10 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
             body = text[start:end]
             func_id = f"js:function:{rel}:{name}"
+            function_aliases, shadowed_functions = _javascript_function_aliases(
+                body,
+                {**local_functions, **imported_functions},
+            )
             graph.add_node(
                 func_id,
                 name,
@@ -105,11 +123,14 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 base = call.split(".", 1)[0]
                 if base in JS_KEYWORDS or call == name:
                     continue
-                target_id = (
-                    local_functions.get(call)
-                    or _local_javascript_member_call_target(call, local_functions)
-                    or imported_functions.get(call)
-                )
+                if call in shadowed_functions:
+                    target_id = function_aliases.get(call)
+                else:
+                    target_id = (
+                        local_functions.get(call)
+                        or _local_javascript_member_call_target(call, local_functions)
+                        or imported_functions.get(call)
+                    )
                 if not target_id:
                     target_id = f"js:call:{call}"
                     graph.add_node(target_id, call, attributes={"kind": "call_target", "language": _language(path)})
@@ -131,6 +152,75 @@ def _local_javascript_member_call_target(call: str, local_functions: dict[str, s
     if receiver != "this" or not member or "." in member:
         return None
     return local_functions.get(member)
+
+
+def _javascript_function_aliases(body: str, known_functions: dict[str, str]) -> tuple[dict[str, str], set[str]]:
+    assignments: dict[str, set[str | None]] = {}
+    for name in _javascript_parameter_names(body):
+        assignments.setdefault(name, set()).add(None)
+
+    for match in JS_ALIAS_DECL_RE.finditer(body):
+        _record_javascript_alias(assignments, known_functions, match.group("name"), match.group("target"))
+    for match in JS_ALIAS_ASSIGN_RE.finditer(body):
+        _record_javascript_alias(assignments, known_functions, match.group("name"), match.group("target"))
+
+    aliases: dict[str, str] = {}
+    for name, target_ids in assignments.items():
+        if len(target_ids) == 1:
+            target_id = next(iter(target_ids))
+            if target_id:
+                aliases[name] = target_id
+    return aliases, set(assignments)
+
+
+def _record_javascript_alias(
+    assignments: dict[str, set[str | None]],
+    known_functions: dict[str, str],
+    name: str,
+    target: str,
+) -> None:
+    if name in JS_KEYWORDS:
+        return
+    assignments.setdefault(name, set()).add(_javascript_reference_target(assignments, known_functions, target))
+
+
+def _javascript_reference_target(
+    assignments: dict[str, set[str | None]],
+    known_functions: dict[str, str],
+    target: str,
+) -> str | None:
+    if target in assignments:
+        target_ids = assignments[target]
+        if len(target_ids) == 1:
+            return next(iter(target_ids))
+        return None
+    return known_functions.get(target)
+
+
+def _javascript_parameter_names(body: str) -> set[str]:
+    header = body.split("{", 1)[0]
+    params: str | None = None
+    arrow_match = re.search(
+        r"=\s*(?:async\s*)?(?:\((?P<group>[^)]*)\)|(?P<single>[A-Za-z_$][\w$]*))\s*=>",
+        header,
+    )
+    if arrow_match:
+        params = arrow_match.group("group") or arrow_match.group("single")
+    else:
+        function_match = re.search(r"\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\((?P<params>[^)]*)\)", header)
+        method_match = re.search(r"\b[A-Za-z_$][\w$]*\s*\((?P<params>[^)]*)\)\s*$", header)
+        if function_match:
+            params = function_match.group("params")
+        elif method_match:
+            params = method_match.group("params")
+
+    if not params:
+        return set()
+    return {
+        part.strip().lstrip(".").split("=", 1)[0].strip()
+        for part in params.split(",")
+        if re.match(r"^\s*\.{0,3}[A-Za-z_$][\w$]*(?:\s*=.*)?$", part)
+    }
 
 
 def _default_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:
