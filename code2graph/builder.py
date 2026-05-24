@@ -9,6 +9,7 @@ from .infra_graph import build_infra_graph
 from .models import Graph
 from .schema_graph import build_schema_graph
 from .security_graph import build_security_graph
+from .web_graph import build_web_graph
 from .workflow_graph import build_workflow_graph
 
 GRAPH_BUILDERS = {
@@ -19,6 +20,7 @@ GRAPH_BUILDERS = {
     "workflow": build_workflow_graph,
     "infra": build_infra_graph,
     "security": build_security_graph,
+    "web": build_web_graph,
 }
 
 

@@ -1335,6 +1335,46 @@ resource "aws_iam_policy" "wide" {
     assert all("sk-test-secret" not in json.dumps(node) for node in risks)
 
 
+def test_web_graph_extracts_react_routes_tailwind_and_assets(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"react": "19.1.0", "next": "15.3.0", "tailwindcss": "4.1.0"}}),
+        encoding="utf-8",
+    )
+    page = tmp_path / "app" / "users" / "[id]"
+    page.mkdir(parents=True)
+    (page / "page.tsx").write_text(
+        """
+import { useMemo } from "react";
+
+export default function UserPage() {
+  const name = useMemo(() => "Ada", []);
+  return <main className="flex gap-2 bg-white"><Profile name={name} /></main>;
+}
+
+function Profile() {
+  return <section className="text-sm rounded-md">profile</section>;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "index.html").write_text(
+        '<html><head><link href="/style.css"></head><body><div id="root"></div></body></html>',
+        encoding="utf-8",
+    )
+    (tmp_path / "style.css").write_text(".card, main > section { color: red; }\n", encoding="utf-8")
+
+    graph = build_graph(tmp_path, "web").to_dict()
+
+    assert any(node["id"] == "web:framework:react" for node in graph["nodes"])
+    assert any(node["id"] == "web:framework:nextjs" for node in graph["nodes"])
+    assert any(node["id"] == "web:component:app/users/[id]/page.tsx:UserPage" for node in graph["nodes"])
+    assert any(node["id"] == "web:hook:app/users/[id]/page.tsx:useMemo" for node in graph["nodes"])
+    assert any(node["id"] == "web:route:/users/:id" for node in graph["nodes"])
+    assert any(node["id"] == "web:tailwind:flex" for node in graph["nodes"])
+    assert any(node["id"] == "web:asset:index.html:/style.css" for node in graph["nodes"])
+    assert any(node["attributes"].get("kind") == "css_selector" and node["label"] == ".card" for node in graph["nodes"])
+
+
 def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

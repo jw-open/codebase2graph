@@ -54,6 +54,7 @@ python -m code2graph /path/to/repo --graph entity
 python -m code2graph /path/to/repo --graph schema
 python -m code2graph /path/to/repo --graph workflow
 python -m code2graph /path/to/repo --graph infra
+python -m code2graph /path/to/repo --graph web
 ```
 
 Graph types:
@@ -64,6 +65,7 @@ Graph types:
 - `schema`: database/schema hints from SQL, Prisma, Django, SQLAlchemy, and common migration files.
 - `workflow`: likely runnable workflows from package scripts, Makefile targets, CI jobs, Docker Compose services, and Python entrypoints.
 - `infra`: service topology, CI/CD pipelines, service-level communication, cloud providers/resources, integrations, and package/runtime dependencies.
+- `web`: Node.js/frontend application graph for React, TypeScript, HTML, CSS, Tailwind utilities, routes, rendered DOM elements, components, hooks, and web framework packages.
 - `all`: merged multi-layer graph.
 
 The infra graph currently extracts:
