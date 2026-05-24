@@ -8,11 +8,12 @@ from .scanner import iter_files, rel_id, read_text
 
 
 class PythonCollector(ast.NodeVisitor):
-    def __init__(self, root: Path, path: Path, graph: Graph) -> None:
+    def __init__(self, root: Path, path: Path, graph: Graph, local_functions: dict[str, str]) -> None:
         self.root = root
         self.path = path
         self.graph = graph
         self.file_id = rel_id("file", root, path)
+        self.local_functions = local_functions
         self.scope: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -68,12 +69,14 @@ class PythonCollector(ast.NodeVisitor):
             if isinstance(child, ast.Call):
                 call_name = _call_name(child.func)
                 if call_name:
-                    target_id = f"py:call:{call_name}"
-                    self.graph.add_node(
-                        target_id,
-                        call_name,
-                        attributes={"kind": "call_target", "language": "python"},
-                    )
+                    target_id = self.local_functions.get(call_name)
+                    if not target_id:
+                        target_id = f"py:call:{call_name}"
+                        self.graph.add_node(
+                            target_id,
+                            call_name,
+                            attributes={"kind": "call_target", "language": "python"},
+                        )
                     self.graph.add_edge(func_id, target_id, "calls")
         self.generic_visit(node)
         self.scope.pop()
@@ -109,8 +112,17 @@ def build_python_graph(root: Path) -> Graph:
             tree = ast.parse(text, filename=str(path))
         except SyntaxError:
             continue
-        PythonCollector(root, path, graph).visit(tree)
+        PythonCollector(root, path, graph, _local_function_ids(root, path, tree)).visit(tree)
     return graph
+
+
+def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            counts[node.name] = counts.get(node.name, 0) + 1
+    rel = path.relative_to(root).as_posix()
+    return {name: f"py:function:{rel}:{name}" for name, count in counts.items() if count == 1}
 
 
 def _call_name(node: ast.AST) -> str | None:
@@ -120,4 +132,3 @@ def _call_name(node: ast.AST) -> str | None:
         base = _call_name(node.value)
         return f"{base}.{node.attr}" if base else node.attr
     return None
-

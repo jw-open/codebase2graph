@@ -51,6 +51,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": _language(path), "path": rel})
         text = read_text(path)
         matches = list(JS_FUNC_RE.finditer(text))
+        local_functions = _local_javascript_function_ids(rel, matches)
         for index, match in enumerate(matches):
             name = next((group for group in match.groups() if group), None)
             if not name or name in JS_KEYWORDS:
@@ -74,12 +75,22 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 base = call.split(".", 1)[0]
                 if base in JS_KEYWORDS or call == name:
                     continue
-                target_id = f"js:call:{call}"
-                graph.add_node(target_id, call, attributes={"kind": "call_target", "language": _language(path)})
+                target_id = local_functions.get(call)
+                if not target_id:
+                    target_id = f"js:call:{call}"
+                    graph.add_node(target_id, call, attributes={"kind": "call_target", "language": _language(path)})
                 graph.add_edge(func_id, target_id, "calls")
     return graph
 
 
+def _local_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for match in matches:
+        name = next((group for group in match.groups() if group), None)
+        if name and name not in JS_KEYWORDS:
+            counts[name] = counts.get(name, 0) + 1
+    return {name: f"js:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
 def _language(path: Path) -> str:
     return "typescript" if path.suffix in {".ts", ".tsx"} else "javascript"
-

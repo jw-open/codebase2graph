@@ -38,7 +38,7 @@ def main():
 
     labels = {node["label"] for node in graph["nodes"]}
     assert {"helper", "main"}.issubset(labels)
-    assert any(edge["label"] == "calls" and edge["to"] == "py:call:helper" for edge in graph["edges"])
+    assert any(edge["label"] == "calls" and edge["to"] == "py:function:app.py:helper" for edge in graph["edges"])
 
 
 def test_typescript_call_graph(tmp_path: Path) -> None:
@@ -59,7 +59,21 @@ export const main = () => {
     graph = build_graph(tmp_path, "call").to_dict()
 
     assert any(node["id"] == "js:function:app.ts:main" for node in graph["nodes"])
-    assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:helper" for edge in graph["edges"])
+    assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:app.ts:helper" for edge in graph["edges"])
+
+
+def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+def main():
+    external()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:external" for edge in graph["edges"])
 
 
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
