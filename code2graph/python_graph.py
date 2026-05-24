@@ -15,8 +15,9 @@ class PythonCollector(ast.NodeVisitor):
         graph: Graph,
         local_functions: dict[str, str],
         local_classes: dict[str, str],
-        local_methods: dict[tuple[str, str], str],
+        known_methods: dict[tuple[str, str], str],
         imported_functions: dict[str, str],
+        imported_classes: dict[str, str],
     ) -> None:
         self.root = root
         self.path = path
@@ -24,7 +25,8 @@ class PythonCollector(ast.NodeVisitor):
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
         self.local_classes = local_classes
-        self.local_methods = local_methods
+        self.known_classes = {**local_classes, **imported_classes}
+        self.known_methods = known_methods
         self.imported_functions = imported_functions
         self.scope: list[str] = []
 
@@ -77,7 +79,7 @@ class PythonCollector(ast.NodeVisitor):
         )
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
         enclosing_class_id = self.scope[-1] if kind == "method" else None
-        class_aliases = _function_class_aliases(node, self.local_classes)
+        class_aliases = _function_class_aliases(node, self.known_classes)
         self.scope.append(func_id)
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -106,7 +108,7 @@ class PythonCollector(ast.NodeVisitor):
         receiver, _, method_name = call_name.partition(".")
         if receiver not in {"self", "cls"} or not method_name or "." in method_name:
             return None
-        return self.local_methods.get((enclosing_class_id, method_name))
+        return self.known_methods.get((enclosing_class_id, method_name))
 
     def _instance_method_call_target(self, call_name: str, class_aliases: dict[str, str]) -> str | None:
         receiver, _, method_name = call_name.partition(".")
@@ -115,7 +117,7 @@ class PythonCollector(ast.NodeVisitor):
         class_id = class_aliases.get(receiver)
         if not class_id:
             return None
-        return self.local_methods.get((class_id, method_name))
+        return self.known_methods.get((class_id, method_name))
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
@@ -152,6 +154,8 @@ def build_python_graph(root: Path) -> Graph:
         parsed_modules.append((path, tree))
 
     function_index = _project_function_index(root, parsed_modules)
+    class_index = _project_class_index(root, parsed_modules)
+    method_index = _project_method_index(root, parsed_modules)
     for path, tree in parsed_modules:
         PythonCollector(
             root,
@@ -159,8 +163,9 @@ def build_python_graph(root: Path) -> Graph:
             graph,
             _local_function_ids(root, path, tree),
             _local_class_ids(root, path, tree),
-            _local_method_ids(root, path, tree),
+            method_index,
             _imported_function_ids(root, path, tree, function_index),
+            _imported_class_ids(root, path, tree, class_index),
         ).visit(tree)
     return graph
 
@@ -172,6 +177,22 @@ def _project_function_index(root: Path, modules: list[tuple[Path, ast.Module]]) 
         for name, function_id in _local_function_ids(root, path, tree).items():
             function_index[(module, name)] = function_id
     return function_index
+
+
+def _project_class_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> dict[tuple[str, str], str]:
+    class_index: dict[tuple[str, str], str] = {}
+    for path, tree in modules:
+        module = _module_name(root, path)
+        for name, class_id in _local_class_ids(root, path, tree).items():
+            class_index[(module, name)] = class_id
+    return class_index
+
+
+def _project_method_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> dict[tuple[str, str], str]:
+    method_index: dict[tuple[str, str], str] = {}
+    for path, tree in modules:
+        method_index.update(_local_method_ids(root, path, tree))
+    return method_index
 
 
 def _imported_function_ids(
@@ -203,6 +224,35 @@ def _imported_function_ids(
     return imported
 
 
+def _imported_class_ids(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    class_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
+    imported: dict[str, str] = {}
+    current_module = _module_name(root, path)
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name
+                local_name = alias.asname or module
+                _add_module_class_aliases(imported, class_index, local_name, module)
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from_module(current_module, node.level, node.module)
+            if not module:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local_name = alias.asname or alias.name
+                class_id = class_index.get((module, alias.name))
+                if class_id:
+                    imported[local_name] = class_id
+                _add_module_class_aliases(imported, class_index, local_name, f"{module}.{alias.name}")
+    return imported
+
+
 def _add_module_function_aliases(
     imported: dict[str, str],
     function_index: dict[tuple[str, str], str],
@@ -213,6 +263,18 @@ def _add_module_function_aliases(
     for (indexed_module, function_name), function_id in function_index.items():
         if indexed_module == module or indexed_module.startswith(prefix):
             imported[f"{local_name}.{function_name}"] = function_id
+
+
+def _add_module_class_aliases(
+    imported: dict[str, str],
+    class_index: dict[tuple[str, str], str],
+    local_name: str,
+    module: str,
+) -> None:
+    prefix = f"{module}."
+    for (indexed_module, class_name), class_id in class_index.items():
+        if indexed_module == module or indexed_module.startswith(prefix):
+            imported[f"{local_name}.{class_name}"] = class_id
 
 
 def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, str]:
@@ -338,7 +400,7 @@ def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) ->
     if not isinstance(node, ast.Call):
         return None
     call_name = _call_name(node.func)
-    if not call_name or "." in call_name:
+    if not call_name:
         return None
     return local_classes.get(call_name)
 

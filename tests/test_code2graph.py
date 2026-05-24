@@ -160,6 +160,46 @@ def main():
     assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
 
 
+def test_python_imported_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import service
+from service import Service
+
+def direct():
+    worker = Service()
+    return worker.helper()
+
+def qualified():
+    worker = service.Service()
+    return worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:direct"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:qualified"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
+
+
 def test_python_reassigned_instance_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
