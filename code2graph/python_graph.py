@@ -14,6 +14,7 @@ class PythonCollector(ast.NodeVisitor):
         path: Path,
         graph: Graph,
         local_functions: dict[str, str],
+        local_methods: dict[tuple[str, str], str],
         imported_functions: dict[str, str],
     ) -> None:
         self.root = root
@@ -21,6 +22,7 @@ class PythonCollector(ast.NodeVisitor):
         self.graph = graph
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
+        self.local_methods = local_methods
         self.imported_functions = imported_functions
         self.scope: list[str] = []
 
@@ -72,12 +74,17 @@ class PythonCollector(ast.NodeVisitor):
             },
         )
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
+        enclosing_class_id = self.scope[-1] if kind == "method" else None
         self.scope.append(func_id)
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
                 call_name = _call_name(child.func)
                 if call_name:
-                    target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
+                    target_id = (
+                        self._method_call_target(call_name, enclosing_class_id)
+                        or self.local_functions.get(call_name)
+                        or self.imported_functions.get(call_name)
+                    )
                     if not target_id:
                         target_id = f"py:call:{call_name}"
                         self.graph.add_node(
@@ -88,6 +95,14 @@ class PythonCollector(ast.NodeVisitor):
                     self.graph.add_edge(func_id, target_id, "calls")
         self.generic_visit(node)
         self.scope.pop()
+
+    def _method_call_target(self, call_name: str, enclosing_class_id: str | None) -> str | None:
+        if not enclosing_class_id:
+            return None
+        receiver, _, method_name = call_name.partition(".")
+        if receiver not in {"self", "cls"} or not method_name or "." in method_name:
+            return None
+        return self.local_methods.get((enclosing_class_id, method_name))
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
@@ -130,6 +145,7 @@ def build_python_graph(root: Path) -> Graph:
             path,
             graph,
             _local_function_ids(root, path, tree),
+            _local_method_ids(root, path, tree),
             _imported_function_ids(root, path, tree, function_index),
         ).visit(tree)
     return graph
@@ -192,6 +208,23 @@ def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, s
             counts[node.name] = counts.get(node.name, 0) + 1
     rel = path.relative_to(root).as_posix()
     return {name: f"py:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _local_method_ids(root: Path, path: Path, tree: ast.Module) -> dict[tuple[str, str], str]:
+    rel = path.relative_to(root).as_posix()
+    methods: dict[tuple[str, str], str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        counts: dict[str, int] = {}
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                counts[child.name] = counts.get(child.name, 0) + 1
+        class_id = f"py:class:{rel}:{node.name}"
+        for name, count in counts.items():
+            if count == 1:
+                methods[(class_id, name)] = f"py:method:{rel}:{node.name}.{name}"
+    return methods
 
 
 def _module_name(root: Path, path: Path) -> str:

@@ -113,6 +113,29 @@ def main():
     assert not any(node["id"] == "py:call:helpers.qualified" for node in graph["nodes"])
 
 
+def test_python_same_class_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+    def main(self):
+        return self.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:method:service.py:Service.main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:self.helper" for node in graph["nodes"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """
