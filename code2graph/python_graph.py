@@ -80,33 +80,50 @@ class PythonCollector(ast.NodeVisitor):
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
         enclosing_class_id = self.scope[-1] if kind == "method" else None
         class_aliases = _function_class_aliases(node, self.known_classes)
-        known_functions = {**self.local_functions, **self.imported_functions}
+        nested_functions = self._nested_function_ids(node)
+        known_functions = {**self.local_functions, **self.imported_functions, **nested_functions}
         function_aliases, shadowed_functions = _function_aliases(node, known_functions)
         self.scope.append(func_id)
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                call_name = _call_name(child.func)
-                if call_name:
-                    target_id = (
-                        self._method_call_target(call_name, enclosing_class_id)
-                        or self._instance_method_call_target(call_name, class_aliases)
-                        or self._class_method_call_target(call_name)
+        for child in _scope_calls(node):
+            call_name = _call_name(child.func)
+            if call_name:
+                target_id = (
+                    self._method_call_target(call_name, enclosing_class_id)
+                    or self._instance_method_call_target(call_name, class_aliases)
+                    or self._class_method_call_target(call_name)
+                )
+                if not target_id:
+                    if call_name in nested_functions:
+                        target_id = nested_functions[call_name]
+                    elif call_name in shadowed_functions:
+                        target_id = function_aliases.get(call_name)
+                    else:
+                        target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
+                if not target_id:
+                    target_id = f"py:call:{call_name}"
+                    self.graph.add_node(
+                        target_id,
+                        call_name,
+                        attributes={"kind": "call_target", "language": "python"},
                     )
-                    if not target_id:
-                        if call_name in shadowed_functions:
-                            target_id = function_aliases.get(call_name)
-                        else:
-                            target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
-                    if not target_id:
-                        target_id = f"py:call:{call_name}"
-                        self.graph.add_node(
-                            target_id,
-                            call_name,
-                            attributes={"kind": "call_target", "language": "python"},
-                        )
-                    self.graph.add_edge(func_id, target_id, "calls")
+                self.graph.add_edge(func_id, target_id, "calls")
         self.generic_visit(node)
         self.scope.pop()
+
+    def _nested_function_ids(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
+        counts: dict[str, int] = {}
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                counts[child.name] = counts.get(child.name, 0) + 1
+
+        rel = self.path.relative_to(self.root).as_posix()
+        scope = ".".join([self.graph.nodes[s].label for s in self.scope])
+        prefix = f"{scope}.{node.name}" if scope else node.name
+        return {
+            name: f"py:function:{rel}:{prefix}.{name}"
+            for name, count in counts.items()
+            if count == 1
+        }
 
     def _method_call_target(self, call_name: str, enclosing_class_id: str | None) -> str | None:
         if not enclosing_class_id:
@@ -479,6 +496,34 @@ class _FunctionAliasVisitor(ast.NodeVisitor):
         if not call_name or call_name in self.assignments:
             return None
         return self.known_functions.get(call_name)
+
+
+class _ScopeCallVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.calls: list[ast.Call] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self.calls.append(node)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+
+def _scope_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Call]:
+    visitor = _ScopeCallVisitor()
+    for child in node.body:
+        visitor.visit(child)
+    return visitor.calls
 
 
 def _target_names(node: ast.AST) -> list[str]:

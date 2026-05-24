@@ -346,6 +346,41 @@ def main(flag):
     )
 
 
+def test_python_nested_function_calls_stay_in_lexical_scope(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+def top_helper():
+    return 1
+
+def outer():
+    def inner():
+        return top_helper()
+
+    return inner()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:outer"
+        and edge["to"] == "py:function:app.py:outer.inner"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:outer.inner"
+        and edge["to"] == "py:function:app.py:top_helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:app.py:outer"
+        and edge["to"] == "py:function:app.py:top_helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:inner" for node in graph["nodes"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """
