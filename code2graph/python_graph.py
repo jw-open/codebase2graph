@@ -375,7 +375,9 @@ def _add_module_function_aliases(
     prefix = f"{module}."
     for (indexed_module, function_name), function_id in function_index.items():
         if indexed_module == module or indexed_module.startswith(prefix):
-            imported[f"{local_name}.{function_name}"] = function_id
+            suffix = indexed_module.removeprefix(prefix) if indexed_module.startswith(prefix) else ""
+            qualified_name = ".".join(part for part in [local_name, suffix, function_name] if part)
+            imported[qualified_name] = function_id
 
 
 def _add_star_function_aliases(
@@ -397,7 +399,9 @@ def _add_module_class_aliases(
     prefix = f"{module}."
     for (indexed_module, class_name), class_id in class_index.items():
         if indexed_module == module or indexed_module.startswith(prefix):
-            imported[f"{local_name}.{class_name}"] = class_id
+            suffix = indexed_module.removeprefix(prefix) if indexed_module.startswith(prefix) else ""
+            qualified_name = ".".join(part for part in [local_name, suffix, class_name] if part)
+            imported[qualified_name] = class_id
 
 
 def _add_star_class_aliases(
