@@ -31,11 +31,14 @@ Status: implemented.
 - Add a local scheduler command that can run analysis every 20 minutes.
 - Produce diff reports between graph generations.
 - Keep generated graph snapshots outside git by default.
+- Generate a prompt/handoff file for the next coding loop with context, issues, tests, and suggested next implementation steps.
 
 Status: partially implemented.
 
 - `code2graph-iterate` / `python -m code2graph.iterate` can run once, N times, or forever.
 - It writes tracked progress to `CODE2GRAPH_PROGRESS.md`.
+- It writes tracked next-loop context to `CODE2GRAPH_NEXT_PROMPT.md`.
 - It keeps large graph snapshots in ignored `.code2graph-runs/`.
 - It can commit and push progress using the `jw-open` identity when `--commit-push` is set.
 - It can call a local report command for Discord/webhook integration.
+- It can run a test command each loop and include the output in the prompt.

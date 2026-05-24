@@ -80,6 +80,17 @@ python -m code2graph.iterate ../claude-code-source-code \
 ```
 
 Generated graph snapshots go under `.code2graph-runs/`, which is ignored by git. The tracked progress file is `CODE2GRAPH_PROGRESS.md`.
+Each loop also writes `CODE2GRAPH_NEXT_PROMPT.md`, a handoff prompt for the next coding pass. It includes latest graph counts, deltas from the previous snapshot when available, graph-health warnings, test output, and recommended next steps.
+
+By default the loop runs `python -m pytest -q` after generating the graph. Override or disable that with:
+
+```bash
+python -m code2graph.iterate ../claude-code-source-code \
+  --test-command "python -m pytest -q tests/test_code2graph.py"
+
+python -m code2graph.iterate ../claude-code-source-code \
+  --test-command ""
+```
 
 To report each loop to a bot or webhook, pass a command that reads the progress line from stdin:
 

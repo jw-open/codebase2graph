@@ -6,6 +6,7 @@ from pathlib import Path
 from code2graph.builder import build_graph
 from code2graph.cli import main
 from code2graph.iterate import main as iterate_main
+from code2graph.prompt import build_iteration_prompt
 
 
 def test_folder_graph_shape(tmp_path: Path) -> None:
@@ -98,6 +99,7 @@ def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypat
     (repo / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
     output_dir = tmp_path / "runs"
     report_file = tmp_path / "progress.md"
+    prompt_file = tmp_path / "next_prompt.md"
 
     monkeypatch.chdir(tmp_path)
     code = iterate_main(
@@ -111,9 +113,46 @@ def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypat
             str(output_dir),
             "--report-file",
             str(report_file),
+            "--prompt-file",
+            str(prompt_file),
+            "--test-command",
+            "",
         ]
     )
 
     assert code == 0
     assert "generated" in report_file.read_text(encoding="utf-8")
     assert list(output_dir.glob("repo.all.*.json"))
+    prompt = prompt_file.read_text(encoding="utf-8")
+    assert "code2graph Next Iteration Prompt" in prompt
+    assert "Recommended Next Steps" in prompt
+    assert "Not run" in prompt
+
+
+def test_iteration_prompt_includes_graph_health_and_tests(tmp_path: Path) -> None:
+    prompt = build_iteration_prompt(
+        repo_path=tmp_path,
+        graph_type="all",
+        snapshot=tmp_path / "current.json",
+        summary={
+            "node_count": 3,
+            "edge_count": 2,
+            "node_kinds": {"file": 2, "function": 1},
+            "edge_labels": {"contains": 1, "calls": 1},
+            "dangling_edge_count": 1,
+            "isolated_node_count": 1,
+        },
+        previous_snapshot=tmp_path / "previous.json",
+        previous_summary={
+            "node_count": 2,
+            "edge_count": 1,
+            "dangling_edge_count": 0,
+            "isolated_node_count": 2,
+        },
+        test_result=None,
+    )
+
+    assert "Nodes: 3 (+1)" in prompt
+    assert "Fix 1 dangling edges" in prompt
+    assert "Review 1 isolated nodes" in prompt
+    assert "jw-open <176761431+jw-open@users.noreply.github.com>" in prompt

@@ -9,6 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .builder import build_graph
+from .prompt import (
+    TestResult,
+    build_iteration_prompt,
+    find_previous_snapshot,
+    load_graph,
+    summarize_graph,
+    write_iteration_prompt,
+)
 
 
 def _utc_now() -> str:
@@ -22,33 +30,6 @@ def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _summarize_graph(graph: dict[str, object]) -> dict[str, object]:
-    nodes = graph.get("nodes", [])
-    edges = graph.get("edges", [])
-    kinds: dict[str, int] = {}
-    labels: dict[str, int] = {}
-    if isinstance(nodes, list):
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            attrs = node.get("attributes", {})
-            if isinstance(attrs, dict):
-                kind = str(attrs.get("kind", "unknown"))
-                kinds[kind] = kinds.get(kind, 0) + 1
-    if isinstance(edges, list):
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            label = str(edge.get("label", "unknown"))
-            labels[label] = labels.get(label, 0) + 1
-    return {
-        "node_count": len(nodes) if isinstance(nodes, list) else 0,
-        "edge_count": len(edges) if isinstance(edges, list) else 0,
-        "node_kinds": dict(sorted(kinds.items())),
-        "edge_labels": dict(sorted(labels.items())),
-    }
 
 
 def _append_report(report_file: Path, summary: dict[str, object], snapshot: Path) -> str:
@@ -70,10 +51,18 @@ def _notify(command: str | None, message: str, cwd: Path) -> None:
     subprocess.run(command, input=message, cwd=cwd, check=False, text=True, shell=True)
 
 
-def _commit_and_push(repo_root: Path, message: str) -> None:
+def _run_test(command: str | None, cwd: Path) -> TestResult | None:
+    if not command:
+        return None
+    result = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True, shell=True)
+    output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part)
+    return TestResult(command=command, returncode=result.returncode, output=output)
+
+
+def _commit_and_push(repo_root: Path, message: str, paths: list[Path]) -> None:
     _run(["git", "config", "user.name", "jw-open"], repo_root)
     _run(["git", "config", "user.email", "176761431+jw-open@users.noreply.github.com"], repo_root)
-    _run(["git", "add", "CODE2GRAPH_PROGRESS.md"], repo_root)
+    _run(["git", "add", *[str(path) for path in paths]], repo_root)
     diff = _run(["git", "diff", "--cached", "--quiet"], repo_root)
     if diff.returncode == 0:
         return
@@ -87,13 +76,31 @@ def run_once(args: argparse.Namespace, repo_root: Path) -> str:
     graph = build_graph(analyzed_repo, args.graph).to_dict()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     snapshot = Path(args.output_dir) / f"{analyzed_repo.name}.{args.graph}.{stamp}.json"
+    previous_snapshot = find_previous_snapshot(Path(args.output_dir), snapshot, analyzed_repo.name, args.graph)
+    previous_summary = summarize_graph(load_graph(previous_snapshot)) if previous_snapshot else None
     _write_json(snapshot, graph)
-    summary = _summarize_graph(graph)
+    summary = summarize_graph(graph)
+    test_result = _run_test(args.test_command, repo_root)
+    prompt_file = Path(args.prompt_file)
+    prompt = build_iteration_prompt(
+        repo_path=analyzed_repo,
+        graph_type=args.graph,
+        snapshot=snapshot,
+        summary=summary,
+        previous_snapshot=previous_snapshot,
+        previous_summary=previous_summary,
+        test_result=test_result,
+    )
+    write_iteration_prompt(prompt_file, prompt)
     report_line = _append_report(Path(args.report_file), summary, snapshot)
-    _notify(args.report_command, report_line, repo_root)
+    test_status = ""
+    if test_result is not None:
+        test_status = " Tests passed." if test_result.passed else f" Tests failed: `{test_result.command}`."
+    report_message = f"{report_line} Prompt: `{prompt_file}`.{test_status}"
+    _notify(args.report_command, report_message, repo_root)
     if args.commit_push:
-        _commit_and_push(repo_root, f"Record code2graph iteration {stamp}")
-    return report_line
+        _commit_and_push(repo_root, f"Record code2graph iteration {stamp}", [Path(args.report_file), prompt_file])
+    return report_message
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,7 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iterations", type=int, default=1, help="Number of loops to run. Use 0 for forever.")
     parser.add_argument("--output-dir", default=".code2graph-runs")
     parser.add_argument("--report-file", default="CODE2GRAPH_PROGRESS.md")
+    parser.add_argument("--prompt-file", default="CODE2GRAPH_NEXT_PROMPT.md")
     parser.add_argument("--report-command", help="Optional shell command that receives the progress line on stdin.")
+    parser.add_argument(
+        "--test-command",
+        default="python -m pytest -q",
+        help="Optional shell command to run after graph generation. Use an empty string to skip.",
+    )
     parser.add_argument("--commit-push", action="store_true", help="Commit progress using jwpublic identity and push main.")
     args = parser.parse_args(argv)
 
