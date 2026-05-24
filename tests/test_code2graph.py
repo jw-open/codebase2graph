@@ -266,6 +266,41 @@ def main():
     assert not any(node["id"] in {"py:call:local_alias", "py:call:imported_alias"} for node in graph["nodes"])
 
 
+def test_python_local_functions_shadow_imported_function_aliases(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def helper():
+    return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import helper
+
+def helper():
+    return 2
+
+def main():
+    alias = helper
+    alias()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:app.py:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:alias" for node in graph["nodes"])
+
+
 def test_python_ambiguous_function_alias_calls_remain_placeholders(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
@@ -425,6 +460,40 @@ def main():
         node["id"] in {"py:call:Local", "py:call:Service", "py:call:service.Service"}
         for node in graph["nodes"]
     )
+
+
+def test_python_local_classes_shadow_imported_classes(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    pass
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from service import Service
+
+class Service:
+    pass
+
+def main():
+    Service()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:app.py:Service"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:service.py:Service"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:Service" for node in graph["nodes"])
 
 
 def test_python_class_qualified_method_calls_resolve_to_methods(tmp_path: Path) -> None:

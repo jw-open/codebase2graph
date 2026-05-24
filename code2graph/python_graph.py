@@ -25,7 +25,7 @@ class PythonCollector(ast.NodeVisitor):
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
         self.local_classes = local_classes
-        self.known_classes = {**local_classes, **imported_classes}
+        self.known_classes = {**imported_classes, **local_classes}
         self.known_methods = known_methods
         self.imported_functions = imported_functions
         self.scope: list[str] = []
@@ -81,7 +81,7 @@ class PythonCollector(ast.NodeVisitor):
         enclosing_class_id = self.scope[-1] if kind == "method" else None
         class_aliases = _function_class_aliases(node, self.known_classes)
         nested_functions = self._nested_function_ids(node)
-        known_functions = {**self.local_functions, **self.imported_functions, **nested_functions}
+        known_functions = {**self.imported_functions, **self.local_functions, **nested_functions}
         function_aliases, shadowed_functions = _function_aliases(node, known_functions)
         self.scope.append(func_id)
         for child in _scope_calls(node):
