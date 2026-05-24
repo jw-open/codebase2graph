@@ -6,8 +6,8 @@ You are working only in the `code2graph` repository. Continue improving the code
 
 - Target repo: `/home/jwang/github/ohwise/claude-code-source-code`
 - Graph type: `all`
-- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T035042Z.json`
-- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T034801Z.json`
+- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T035132Z.json`
+- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T035042Z.json`
 
 ## Graph Delta
 
@@ -38,28 +38,15 @@ You are working only in the `code2graph` repository. Continue improving the code
 
 ## Issues And Bugs To Check
 
-- Fix the failing test command before broadening graph extraction.
+- No blocking graph health issue detected in this snapshot.
 
 ## Tests
 
-- `python -m pytest -q` failed with exit code 1.
+- `python -m pytest -q` passed with exit code 0.
 
 ```text
-.......F                                                                 [100%]
-=================================== FAILURES ===================================
-_________________ test_loop_status_without_pid_is_not_running __________________
-
-    def test_loop_status_without_pid_is_not_running() -> None:
->       assert loop_main(["status"]) == 1
-E       AssertionError: assert 0 == 1
-E        +  where 0 = loop_main(['status'])
-
-tests/test_code2graph.py:163: AssertionError
------------------------------ Captured stdout call -----------------------------
-code2graph loop running with pid 2469087
-=========================== short test summary info ============================
-FAILED tests/test_code2graph.py::test_loop_status_without_pid_is_not_running
-1 failed, 7 passed in 0.05s
+........                                                                 [100%]
+8 passed in 0.03s
 ```
 
 ## Recommended Next Steps
