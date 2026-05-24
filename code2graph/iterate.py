@@ -11,6 +11,7 @@ from pathlib import Path
 from .builder import build_graph
 from .prompt import (
     TestResult,
+    build_action_prompt,
     build_iteration_prompt,
     find_previous_snapshot,
     load_graph,
@@ -59,6 +60,53 @@ def _run_test(command: str | None, cwd: Path) -> TestResult | None:
     return TestResult(command=command, returncode=result.returncode, output=output)
 
 
+def _invoke_codex(action_prompt: str, workdir: Path, log_file: Path) -> str:
+    """
+    Invoke Codex headlessly with the given action prompt piped to stdin.
+    Uses the same flags as the discord_codex_relay.mjs relay.
+    Returns the output text (truncated to 4000 chars for logging).
+    """
+    import shutil
+    import tempfile
+
+    codex_bin = shutil.which("codex") or "codex"
+    output_file = Path(tempfile.mktemp(prefix="code2graph-codex-", suffix=".txt"))
+    args = [
+        codex_bin,
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "-C", str(workdir),
+        "-s", "danger-full-access",
+        "-o", str(output_file),
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            args,
+            input=action_prompt,
+            cwd=workdir,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=900,  # 15 min max per Codex run
+        )
+        output = ""
+        if output_file.exists():
+            output = output_file.read_text(encoding="utf-8", errors="replace")
+            output_file.unlink(missing_ok=True)
+        combined = "\n".join(filter(None, [output, result.stdout, result.stderr])).strip()
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(f"\n--- Codex run at {_utc_now()} (exit {result.returncode}) ---\n")
+            f.write(combined[:8000] + "\n")
+        return combined[:4000]
+    except Exception as exc:  # pragma: no cover
+        msg = f"Codex invocation failed: {exc}"
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(f"\n--- Codex error at {_utc_now()} ---\n{msg}\n")
+        return msg
+
+
 def _commit_and_push(repo_root: Path, message: str, paths: list[Path]) -> None:
     _run(["git", "config", "user.name", "jw-open"], repo_root)
     _run(["git", "config", "user.email", "176761431+jw-open@users.noreply.github.com"], repo_root)
@@ -82,7 +130,7 @@ def run_once(args: argparse.Namespace, repo_root: Path) -> str:
     summary = summarize_graph(graph)
     test_result = _run_test(args.test_command, repo_root)
     prompt_file = Path(args.prompt_file)
-    prompt = build_iteration_prompt(
+    context_prompt = build_iteration_prompt(
         repo_path=analyzed_repo,
         graph_type=args.graph,
         snapshot=snapshot,
@@ -91,15 +139,24 @@ def run_once(args: argparse.Namespace, repo_root: Path) -> str:
         previous_summary=previous_summary,
         test_result=test_result,
     )
-    write_iteration_prompt(prompt_file, prompt)
+    write_iteration_prompt(prompt_file, context_prompt)
     report_line = _append_report(Path(args.report_file), summary, snapshot)
     test_status = ""
     if test_result is not None:
         test_status = " Tests passed." if test_result.passed else f" Tests failed: `{test_result.command}`."
-    report_message = f"{report_line} Prompt: `{prompt_file}`.{test_status}"
-    _notify(args.report_command, report_message, repo_root)
+
+    # Commit the context files BEFORE running Codex so Codex starts from a clean state.
     if args.commit_push:
-        _commit_and_push(repo_root, f"Record code2graph iteration {stamp}", [Path(args.report_file), prompt_file])
+        _commit_and_push(repo_root, f"chore: record code2graph iteration {stamp}", [Path(args.report_file), prompt_file])
+
+    # Invoke Codex with a concrete action prompt — this is what actually implements improvements.
+    log_file = repo_root / ".code2graph-runs" / "loop.log"
+    action_prompt = build_action_prompt(context_prompt, repo_root)
+    codex_output = _invoke_codex(action_prompt, repo_root, log_file)
+    codex_summary = codex_output[:300].replace("\n", " ").strip() if codex_output else "(no output)"
+
+    report_message = f"{report_line} Prompt: `{prompt_file}`.{test_status} Codex: {codex_summary}"
+    _notify(args.report_command, report_message, repo_root)
     return report_message
 
 

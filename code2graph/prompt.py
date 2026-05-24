@@ -185,3 +185,48 @@ def build_iteration_prompt(
 def write_iteration_prompt(path: Path, prompt: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(prompt, encoding="utf-8")
+
+
+def build_action_prompt(context_prompt: str, repo_root: Path) -> str:
+    """
+    Wrap the analysis context in explicit implementation instructions for Codex.
+
+    The context prompt describes current graph state + recommended next steps.
+    This wrapper tells Codex to pick ONE step and actually implement it.
+    """
+    roadmap_file = repo_root / "ROADMAP.md"
+    roadmap_section = ""
+    if roadmap_file.exists():
+        roadmap_section = f"\n## Project Roadmap\n\n{roadmap_file.read_text(encoding='utf-8').strip()}\n"
+
+    return (
+        "You are an autonomous developer working on `code2graph`, "
+        "a pure-Python package that extracts knowledge graphs from code repositories.\n\n"
+        "Your working directory is the `code2graph` repo root.\n"
+        + roadmap_section
+        + "\n## Current Analysis Context\n\n"
+        + context_prompt.strip()
+        + """
+
+## Your Task
+
+1. Read the **Recommended Next Steps** section above carefully.
+2. Pick the ONE step that adds the most concrete value right now — prefer steps that improve
+   graph correctness or add missing coverage over documentation or cleanup.
+3. Implement it: write real, working Python code in `code2graph/`.
+4. Run `python -m pytest -q` and fix any failures before committing.
+5. Commit ONLY source/test/doc files — never commit `.code2graph-runs/*.json` snapshots.
+6. Use this git identity for commits:
+   - name: `jw-open`
+   - email: `176761431+jw-open@users.noreply.github.com`
+7. Push to `origin main`.
+
+## Constraints
+
+- Do NOT just re-run graph generation or update `CODE2GRAPH_PROGRESS.md` — that happens automatically.
+- Do NOT add new dependencies unless strictly necessary.
+- Each iteration must produce at least one real code change in `code2graph/` or `tests/`.
+- If all recommended steps are already done, look at `ROADMAP.md` for the next priority.
+- Keep changes focused and minimal — one clear improvement per iteration.
+"""
+    )
