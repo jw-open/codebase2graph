@@ -76,6 +76,43 @@ def main():
     assert any(edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:external" for edge in graph["edges"])
 
 
+def test_python_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def direct():
+    return 1
+
+def qualified():
+    return 2
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import helpers
+from helpers import direct
+
+def main():
+    direct()
+    helpers.qualified()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:direct" for node in graph["nodes"])
+    assert not any(node["id"] == "py:call:helpers.qualified" for node in graph["nodes"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """

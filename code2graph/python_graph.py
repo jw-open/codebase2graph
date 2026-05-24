@@ -8,12 +8,20 @@ from .scanner import iter_files, rel_id, read_text
 
 
 class PythonCollector(ast.NodeVisitor):
-    def __init__(self, root: Path, path: Path, graph: Graph, local_functions: dict[str, str]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        path: Path,
+        graph: Graph,
+        local_functions: dict[str, str],
+        imported_functions: dict[str, str],
+    ) -> None:
         self.root = root
         self.path = path
         self.graph = graph
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
+        self.imported_functions = imported_functions
         self.scope: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -69,7 +77,7 @@ class PythonCollector(ast.NodeVisitor):
             if isinstance(child, ast.Call):
                 call_name = _call_name(child.func)
                 if call_name:
-                    target_id = self.local_functions.get(call_name)
+                    target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
                     if not target_id:
                         target_id = f"py:call:{call_name}"
                         self.graph.add_node(
@@ -99,6 +107,7 @@ class PythonCollector(ast.NodeVisitor):
 
 def build_python_graph(root: Path) -> Graph:
     graph = Graph()
+    parsed_modules: list[tuple[Path, ast.Module]] = []
     for path in iter_files(root):
         if path.suffix != ".py":
             continue
@@ -112,8 +121,68 @@ def build_python_graph(root: Path) -> Graph:
             tree = ast.parse(text, filename=str(path))
         except SyntaxError:
             continue
-        PythonCollector(root, path, graph, _local_function_ids(root, path, tree)).visit(tree)
+        parsed_modules.append((path, tree))
+
+    function_index = _project_function_index(root, parsed_modules)
+    for path, tree in parsed_modules:
+        PythonCollector(
+            root,
+            path,
+            graph,
+            _local_function_ids(root, path, tree),
+            _imported_function_ids(root, path, tree, function_index),
+        ).visit(tree)
     return graph
+
+
+def _project_function_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> dict[tuple[str, str], str]:
+    function_index: dict[tuple[str, str], str] = {}
+    for path, tree in modules:
+        module = _module_name(root, path)
+        for name, function_id in _local_function_ids(root, path, tree).items():
+            function_index[(module, name)] = function_id
+    return function_index
+
+
+def _imported_function_ids(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    function_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
+    imported: dict[str, str] = {}
+    current_module = _module_name(root, path)
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name
+                local_name = alias.asname or module
+                _add_module_function_aliases(imported, function_index, local_name, module)
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from_module(current_module, node.level, node.module)
+            if not module:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local_name = alias.asname or alias.name
+                function_id = function_index.get((module, alias.name))
+                if function_id:
+                    imported[local_name] = function_id
+                _add_module_function_aliases(imported, function_index, local_name, f"{module}.{alias.name}")
+    return imported
+
+
+def _add_module_function_aliases(
+    imported: dict[str, str],
+    function_index: dict[tuple[str, str], str],
+    local_name: str,
+    module: str,
+) -> None:
+    prefix = f"{module}."
+    for (indexed_module, function_name), function_id in function_index.items():
+        if indexed_module == module or indexed_module.startswith(prefix):
+            imported[f"{local_name}.{function_name}"] = function_id
 
 
 def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, str]:
@@ -123,6 +192,22 @@ def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, s
             counts[node.name] = counts.get(node.name, 0) + 1
     rel = path.relative_to(root).as_posix()
     return {name: f"py:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _module_name(root: Path, path: Path) -> str:
+    rel = path.relative_to(root).with_suffix("")
+    parts = rel.parts[:-1] if rel.name == "__init__" else rel.parts
+    return ".".join(parts)
+
+
+def _resolve_import_from_module(current_module: str, level: int, module: str | None) -> str:
+    if level == 0:
+        return module or ""
+    package_parts = current_module.split(".")[:-1]
+    if level > 1:
+        package_parts = package_parts[: -(level - 1)]
+    module_parts = [part for part in (module or "").split(".") if part]
+    return ".".join([*package_parts, *module_parts])
 
 
 def _call_name(node: ast.AST) -> str | None:
