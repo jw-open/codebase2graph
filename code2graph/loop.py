@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .builder import GRAPH_BUILDERS
 
 RUNTIME_DIR = ".code2graph-runs"
 PID_FILE = "loop.pid"
@@ -143,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 
     start_parser = subparsers.add_parser("start", help="Start the detached iteration loop.")
     start_parser.add_argument("repo", help="Repository path to analyze.")
-    start_parser.add_argument("--graph", default="all", choices=["all", "folder", "call", "entity", "schema", "workflow"])
+    start_parser.add_argument("--graph", default="all", choices=["all", *GRAPH_BUILDERS.keys()])
     start_parser.add_argument("--interval-minutes", type=float, default=20.0)
     start_parser.add_argument("--output-dir", default=RUNTIME_DIR)
     start_parser.add_argument("--report-file", default="CODE2GRAPH_PROGRESS.md")

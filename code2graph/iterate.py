@@ -13,7 +13,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .builder import build_graph
+from .builder import GRAPH_BUILDERS, build_graph
 from .prompt import (
     TestResult,
     build_action_prompt,
@@ -264,7 +264,7 @@ def run_once(args: argparse.Namespace, repo_root: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run repeated code2graph analysis iterations.")
     parser.add_argument("repo", help="Repository path to analyze.")
-    parser.add_argument("--graph", default="all", choices=["all", "folder", "call", "entity", "schema", "workflow"])
+    parser.add_argument("--graph", default="all", choices=["all", *GRAPH_BUILDERS.keys()])
     parser.add_argument("--interval-minutes", type=float, default=20.0)
     parser.add_argument("--iterations", type=int, default=1, help="Number of loops to run. Use 0 for forever.")
     parser.add_argument("--output-dir", default=".code2graph-runs")
