@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .android_graph import build_android_graph
 from .call_graph import build_call_graph
 from .entity_graph import build_entity_graph
 from .folder_graph import build_folder_graph
@@ -21,6 +22,7 @@ GRAPH_BUILDERS = {
     "infra": build_infra_graph,
     "security": build_security_graph,
     "web": build_web_graph,
+    "android": build_android_graph,
 }
 
 

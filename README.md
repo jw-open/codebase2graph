@@ -55,6 +55,7 @@ python -m code2graph /path/to/repo --graph schema
 python -m code2graph /path/to/repo --graph workflow
 python -m code2graph /path/to/repo --graph infra
 python -m code2graph /path/to/repo --graph web
+python -m code2graph /path/to/repo --graph android
 ```
 
 Graph types:
@@ -66,6 +67,7 @@ Graph types:
 - `workflow`: likely runnable workflows from package scripts, Makefile targets, CI jobs, Docker Compose services, and Python entrypoints.
 - `infra`: service topology, CI/CD pipelines, service-level communication, cloud providers/resources, integrations, and package/runtime dependencies.
 - `web`: Node.js/frontend application graph for React, TypeScript, HTML, CSS, Tailwind utilities, routes, rendered DOM elements, components, hooks, and web framework packages.
+- `android`: Android project graph for Gradle modules/config, manifests, permissions, app components, Kotlin/Java component classes, resources, widgets, and Android dependencies.
 - `all`: merged multi-layer graph.
 
 The infra graph currently extracts:

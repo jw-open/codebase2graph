@@ -1375,6 +1375,94 @@ function Profile() {
     assert any(node["attributes"].get("kind") == "css_selector" and node["label"] == ".card" for node in graph["nodes"])
 
 
+def test_android_graph_extracts_gradle_manifest_sources_and_resources(tmp_path: Path) -> None:
+    (tmp_path / "settings.gradle.kts").write_text('pluginManagement {}\ninclude(":app", ":feature:feed")\n', encoding="utf-8")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "build.gradle.kts").write_text(
+        """
+plugins {
+  id("com.android.application")
+  id("org.jetbrains.kotlin.android")
+}
+
+android {
+  namespace = "com.example.app"
+  compileSdk = 35
+  defaultConfig {
+    applicationId = "com.example.app"
+    minSdk = 26
+    targetSdk = 35
+    versionName = "1.2.3"
+  }
+}
+
+dependencies {
+  implementation("androidx.activity:activity-compose:1.9.0")
+  implementation("com.squareup.retrofit2:retrofit:2.11.0")
+}
+""",
+        encoding="utf-8",
+    )
+    manifest = app / "src" / "main"
+    manifest.mkdir(parents=True)
+    (manifest / "AndroidManifest.xml").write_text(
+        """
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <application android:label="@string/app_name">
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+    <service android:name=".SyncService" android:exported="false" />
+  </application>
+</manifest>
+""",
+        encoding="utf-8",
+    )
+    source = app / "src" / "main" / "java" / "com" / "example" / "app"
+    source.mkdir(parents=True)
+    (source / "MainActivity.kt").write_text(
+        """
+package com.example.app
+
+class MainActivity : ComponentActivity() {
+  fun open() {
+    startActivity(Intent(this, SettingsActivity::class.java))
+  }
+}
+
+class SyncService : Service()
+""",
+        encoding="utf-8",
+    )
+    layout = app / "src" / "main" / "res" / "layout"
+    layout.mkdir(parents=True)
+    (layout / "activity_main.xml").write_text(
+        '<LinearLayout><TextView android:id="@+id/title" /></LinearLayout>',
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "android").to_dict()
+
+    assert any(node["id"] == "android:module::app" for node in graph["nodes"])
+    assert any(node["id"] == "android:plugin:com.android.application" for node in graph["nodes"])
+    assert any(node["id"] == "android:dependency:com.squareup.retrofit2:retrofit:2.11.0" for node in graph["nodes"])
+    assert any(node["id"] == "android:permission:android.permission.INTERNET" for node in graph["nodes"])
+    assert any(node["id"] == "android:activity:.MainActivity" for node in graph["nodes"])
+    assert any(node["id"] == "android:service:.SyncService" for node in graph["nodes"])
+    assert any(
+        node["attributes"].get("kind") == "android_activity" and node["label"] == "MainActivity"
+        for node in graph["nodes"]
+    )
+    assert any(node["id"] == "android:api:intent" for node in graph["nodes"])
+    assert any(node["attributes"].get("kind") == "android_resource" and node["attributes"].get("resource_type") == "layout" for node in graph["nodes"])
+    assert any(node["id"] == "android:widget:TextView" for node in graph["nodes"])
+
+
 def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
