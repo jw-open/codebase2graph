@@ -1151,6 +1151,34 @@ from pkg import service
     assert any(node["id"] == "import:python:helpers" for node in graph["nodes"])
 
 
+def test_javascript_entity_imports_resolve_to_local_files(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text("export function helper() {}\n", encoding="utf-8")
+    (tmp_path / "setup.ts").write_text("export const loaded = true;\n", encoding="utf-8")
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "index.ts").write_text("export function fromIndex() {}\n", encoding="utf-8")
+    (package / "worker.js").write_text("exports.run = () => 1;\n", encoding="utf-8")
+    (tmp_path / "app.ts").write_text(
+        """
+import { helper } from "./helpers";
+import "./setup";
+import * as pkg from "./pkg";
+const worker = require("./pkg/worker");
+import react from "react";
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(edge["from"] == "file:app.ts" and edge["to"] == "file:helpers.ts" for edge in graph["edges"])
+    assert any(edge["from"] == "file:app.ts" and edge["to"] == "file:setup.ts" for edge in graph["edges"])
+    assert any(edge["from"] == "file:app.ts" and edge["to"] == "file:pkg/index.ts" for edge in graph["edges"])
+    assert any(edge["from"] == "file:app.ts" and edge["to"] == "file:pkg/worker.js" for edge in graph["edges"])
+    assert any(node["id"] == "import:typescript:react" for node in graph["nodes"])
+    assert any(edge["from"] == "file:app.ts" and edge["to"] == "import:typescript:react" for edge in graph["edges"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """

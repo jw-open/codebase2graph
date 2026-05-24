@@ -8,14 +8,24 @@ from .models import Graph
 from .scanner import iter_files, rel_id, read_text
 
 SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rs", ".rb", ".php"}
+JAVASCRIPT_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 
-IMPORT_RE = re.compile(r"^\s*(?:import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)['\"]|from\s+([\w.]+)\s+import|require\(['\"]([^'\"]+)['\"]\))", re.M)
+IMPORT_RE = re.compile(
+    r"^\s*(?:"
+    r"import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)['\"]"
+    r"|from\s+([\w.]+)\s+import"
+    r"|(?:const|let|var)\s+.+?=\s*require\(['\"]([^'\"]+)['\"]\)"
+    r"|require\(['\"]([^'\"]+)['\"]\)"
+    r")",
+    re.M,
+)
 TS_ENTITY_RE = re.compile(r"^\s*export\s+(?:default\s+)?(?:class|function|interface|type|const)\s+([A-Za-z_$][\w$]*)|^\s*(?:class|function)\s+([A-Za-z_$][\w$]*)", re.M)
 
 
 def build_entity_graph(root: Path) -> Graph:
     graph = Graph()
     python_modules = _python_module_index(root)
+    javascript_modules = _javascript_module_index(root)
     for path in iter_files(root):
         if path.suffix not in SOURCE_EXTENSIONS:
             continue
@@ -27,11 +37,12 @@ def build_entity_graph(root: Path) -> Graph:
             attributes={"kind": "file", "language": language, "path": path.relative_to(root).as_posix()},
         )
         text = read_text(path)
-        if path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
+        if path.suffix in JAVASCRIPT_EXTENSIONS:
             _add_javascript_entities(graph, root, path, text, file_id)
+            _add_javascript_imports(graph, root, path, text, file_id, javascript_modules)
         if path.suffix == ".py":
             _add_python_imports(graph, root, path, text, file_id, python_modules)
-        else:
+        elif path.suffix not in JAVASCRIPT_EXTENSIONS:
             _add_imports(graph, text, file_id, language)
     return graph
 
@@ -102,6 +113,66 @@ def _add_import(graph: Graph, file_id: str, language: str, module: str) -> None:
     import_id = f"import:{language}:{module}"
     graph.add_node(import_id, module, attributes={"kind": "import", "language": language})
     graph.add_edge(file_id, import_id, "imports")
+
+
+def _add_javascript_imports(
+    graph: Graph,
+    root: Path,
+    path: Path,
+    text: str,
+    file_id: str,
+    javascript_modules: dict[str, set[str]],
+) -> None:
+    language = _language(path)
+    for match in IMPORT_RE.finditer(text):
+        module = next((group for group in match.groups() if group), None)
+        if not module:
+            continue
+        _add_import(graph, file_id, language, module)
+        for target_id in _resolve_javascript_import(root, path, module, javascript_modules):
+            graph.add_edge(file_id, target_id, "imports")
+
+
+def _javascript_module_index(root: Path) -> dict[str, set[str]]:
+    modules: dict[str, set[str]] = {}
+    for path in iter_files(root):
+        if path.suffix not in JAVASCRIPT_EXTENSIONS:
+            continue
+        for module in _javascript_module_names(root, path):
+            modules.setdefault(module, set()).add(rel_id("file", root, path))
+    return modules
+
+
+def _javascript_module_names(root: Path, path: Path) -> list[str]:
+    rel = path.relative_to(root).with_suffix("")
+    names = [rel.as_posix()]
+    if rel.name == "index":
+        parent = rel.parent.as_posix()
+        if parent != ".":
+            names.append(parent)
+    return names
+
+
+def _resolve_javascript_import(
+    root: Path,
+    path: Path,
+    module: str,
+    javascript_modules: dict[str, set[str]],
+) -> list[str]:
+    if not module.startswith("."):
+        return []
+    base = (path.parent / module).resolve()
+    try:
+        rel = base.relative_to(root).as_posix()
+    except ValueError:
+        return []
+    rel_path = Path(rel)
+    module_name = rel_path.with_suffix("").as_posix() if rel_path.suffix in JAVASCRIPT_EXTENSIONS else rel
+    candidates = [module_name, f"{module_name}/index"]
+    target_ids: set[str] = set()
+    for candidate in candidates:
+        target_ids.update(javascript_modules.get(candidate, set()))
+    return sorted(target_ids)
 
 
 def _python_module_index(root: Path) -> dict[str, str]:
