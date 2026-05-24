@@ -8,7 +8,7 @@ from .python_graph import build_python_graph
 from .scanner import iter_files, rel_id, read_text
 
 JS_FUNC_RE = re.compile(
-    r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
+    r"^\s*(?:(?:export\s+default\s+)|(?:export\s+))?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>"
     r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
     re.M,
@@ -51,6 +51,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
     graph = Graph()
     files: list[tuple[Path, str, str, list[re.Match[str]]]] = []
     function_index: dict[tuple[str, str], set[str]] = {}
+    default_function_index: dict[str, set[str]] = {}
     module_index: dict[str, set[Path]] = {}
     for path in iter_files(root):
         if path.suffix not in JS_EXTENSIONS:
@@ -64,12 +65,22 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         for name, function_id in _local_javascript_function_ids(rel, matches).items():
             for module_key in _javascript_module_keys(root, path):
                 function_index.setdefault((module_key, name), set()).add(function_id)
+        for name, function_id in _default_javascript_function_ids(rel, matches).items():
+            for module_key in _javascript_module_keys(root, path):
+                default_function_index.setdefault(module_key, set()).add(function_id)
 
     for path, rel, text, matches in files:
         file_id = rel_id("file", root, path)
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": _language(path), "path": rel})
         local_functions = _local_javascript_function_ids(rel, matches)
-        imported_functions = _imported_javascript_function_ids(root, path, text, function_index, module_index)
+        imported_functions = _imported_javascript_function_ids(
+            root,
+            path,
+            text,
+            function_index,
+            default_function_index,
+            module_index,
+        )
         for index, match in enumerate(matches):
             name = next((group for group in match.groups() if group), None)
             if not name or name in JS_KEYWORDS:
@@ -110,11 +121,25 @@ def _local_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> di
     return {name: f"js:function:{rel}:{name}" for name, count in counts.items() if count == 1}
 
 
+def _default_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:
+    defaults: dict[str, str] = {}
+    for match in matches:
+        name = next((group for group in match.groups() if group), None)
+        if name and name not in JS_KEYWORDS and _is_default_javascript_export(match):
+            defaults[name] = f"js:function:{rel}:{name}"
+    return defaults
+
+
+def _is_default_javascript_export(match: re.Match[str]) -> bool:
+    return bool(re.match(r"^\s*export\s+default\b", match.group(0)))
+
+
 def _imported_javascript_function_ids(
     root: Path,
     path: Path,
     text: str,
     function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
     module_index: dict[str, set[Path]],
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
@@ -122,6 +147,7 @@ def _imported_javascript_function_ids(
         module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
         if not module_keys:
             continue
+        _add_default_javascript_import(imported, default_function_index, module_keys, match.group("clause"))
         _add_named_javascript_imports(imported, function_index, module_keys, match.group("clause"))
         _add_namespace_javascript_imports(imported, function_index, module_keys, match.group("clause"))
 
@@ -135,6 +161,20 @@ def _imported_javascript_function_ids(
         else:
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
+
+
+def _add_default_javascript_import(
+    imported: dict[str, str],
+    default_function_index: dict[str, set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    default_match = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)", clause)
+    if not default_match:
+        return
+    target_id = _unique_default_javascript_function(default_function_index, module_keys)
+    if target_id:
+        imported[default_match.group(1)] = target_id
 
 
 def _add_named_javascript_imports(
@@ -190,6 +230,18 @@ def _unique_javascript_function(
     matches: set[str] = set()
     for module_key in module_keys:
         matches.update(function_index.get((module_key, name), set()))
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
+def _unique_default_javascript_function(
+    default_function_index: dict[str, set[str]],
+    module_keys: list[str],
+) -> str | None:
+    matches: set[str] = set()
+    for module_key in module_keys:
+        matches.update(default_function_index.get(module_key, set()))
     if len(matches) == 1:
         return next(iter(matches))
     return None
