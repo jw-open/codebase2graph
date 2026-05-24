@@ -14,6 +14,7 @@ class PythonCollector(ast.NodeVisitor):
         path: Path,
         graph: Graph,
         local_functions: dict[str, str],
+        local_classes: dict[str, str],
         local_methods: dict[tuple[str, str], str],
         imported_functions: dict[str, str],
     ) -> None:
@@ -22,6 +23,7 @@ class PythonCollector(ast.NodeVisitor):
         self.graph = graph
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
+        self.local_classes = local_classes
         self.local_methods = local_methods
         self.imported_functions = imported_functions
         self.scope: list[str] = []
@@ -75,6 +77,7 @@ class PythonCollector(ast.NodeVisitor):
         )
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
         enclosing_class_id = self.scope[-1] if kind == "method" else None
+        class_aliases = _function_class_aliases(node, self.local_classes)
         self.scope.append(func_id)
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -82,6 +85,7 @@ class PythonCollector(ast.NodeVisitor):
                 if call_name:
                     target_id = (
                         self._method_call_target(call_name, enclosing_class_id)
+                        or self._instance_method_call_target(call_name, class_aliases)
                         or self.local_functions.get(call_name)
                         or self.imported_functions.get(call_name)
                     )
@@ -103,6 +107,15 @@ class PythonCollector(ast.NodeVisitor):
         if receiver not in {"self", "cls"} or not method_name or "." in method_name:
             return None
         return self.local_methods.get((enclosing_class_id, method_name))
+
+    def _instance_method_call_target(self, call_name: str, class_aliases: dict[str, str]) -> str | None:
+        receiver, _, method_name = call_name.partition(".")
+        if not receiver or not method_name or "." in method_name:
+            return None
+        class_id = class_aliases.get(receiver)
+        if not class_id:
+            return None
+        return self.local_methods.get((class_id, method_name))
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
@@ -145,6 +158,7 @@ def build_python_graph(root: Path) -> Graph:
             path,
             graph,
             _local_function_ids(root, path, tree),
+            _local_class_ids(root, path, tree),
             _local_method_ids(root, path, tree),
             _imported_function_ids(root, path, tree, function_index),
         ).visit(tree)
@@ -210,6 +224,15 @@ def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, s
     return {name: f"py:function:{rel}:{name}" for name, count in counts.items() if count == 1}
 
 
+def _local_class_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            counts[node.name] = counts.get(node.name, 0) + 1
+    rel = path.relative_to(root).as_posix()
+    return {name: f"py:class:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
 def _local_method_ids(root: Path, path: Path, tree: ast.Module) -> dict[tuple[str, str], str]:
     rel = path.relative_to(root).as_posix()
     methods: dict[tuple[str, str], str] = {}
@@ -225,6 +248,99 @@ def _local_method_ids(root: Path, path: Path, tree: ast.Module) -> dict[tuple[st
             if count == 1:
                 methods[(class_id, name)] = f"py:method:{rel}:{node.name}.{name}"
     return methods
+
+
+def _function_class_aliases(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    local_classes: dict[str, str],
+) -> dict[str, str]:
+    visitor = _ClassAliasVisitor(local_classes)
+    for child in node.body:
+        visitor.visit(child)
+
+    aliases: dict[str, str] = {}
+    for name, class_ids in visitor.assignments.items():
+        if len(class_ids) == 1:
+            class_id = next(iter(class_ids))
+            if class_id:
+                aliases[name] = class_id
+    return aliases
+
+
+class _ClassAliasVisitor(ast.NodeVisitor):
+    def __init__(self, local_classes: dict[str, str]) -> None:
+        self.local_classes = local_classes
+        self.assignments: dict[str, set[str | None]] = {}
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        class_id = _class_instantiation_target(node.value, self.local_classes)
+        for target in node.targets:
+            self._record(target, class_id)
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        class_id = _class_instantiation_target(node.value, self.local_classes) if node.value else None
+        self._record(node.target, class_id)
+        if node.value:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._record(node.target, None)
+        self.visit(node.value)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._record(node.target, None)
+        for child in [*node.body, *node.orelse]:
+            self.visit(child)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            if item.optional_vars:
+                self._record(item.optional_vars, None)
+        for child in node.body:
+            self.visit(child)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)
+
+    def _record(self, target: ast.AST, class_id: str | None) -> None:
+        for name in _target_names(target):
+            self.assignments.setdefault(name, set()).add(class_id)
+
+
+def _target_names(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for element in node.elts:
+            names.extend(_target_names(element))
+        return names
+    return []
+
+
+def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    call_name = _call_name(node.func)
+    if not call_name or "." in call_name:
+        return None
+    return local_classes.get(call_name)
 
 
 def _module_name(root: Path, path: Path) -> str:

@@ -136,6 +136,58 @@ class Service:
     assert not any(node["id"] == "py:call:self.helper" for node in graph["nodes"])
 
 
+def test_python_local_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+def main():
+    service = Service()
+    return service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
+
+
+def test_python_reassigned_instance_calls_remain_placeholder_targets(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class First:
+    def helper(self):
+        return 1
+
+class Second:
+    def helper(self):
+        return 2
+
+def main(flag):
+    service = First()
+    if flag:
+        service = Second()
+    return service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main" and edge["to"] == "py:call:service.helper"
+        for edge in graph["edges"]
+    )
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """
