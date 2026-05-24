@@ -178,7 +178,7 @@ class PythonCollector(ast.NodeVisitor):
         return self.known_methods.get((enclosing_class_id, method_name))
 
     def _instance_method_call_target(self, call_name: str, class_aliases: dict[str, str]) -> str | None:
-        receiver, _, method_name = call_name.partition(".")
+        receiver, _, method_name = call_name.rpartition(".")
         if not receiver or not method_name or "." in method_name:
             return None
         class_id = class_aliases.get(receiver)
@@ -749,6 +749,9 @@ def _scope_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Call]
 def _target_names(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Name):
         return [node.id]
+    if isinstance(node, ast.Attribute):
+        name = _call_name(node)
+        return [name] if name else []
     if isinstance(node, (ast.Tuple, ast.List)):
         names: list[str] = []
         for element in node.elts:
