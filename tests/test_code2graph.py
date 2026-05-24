@@ -113,6 +113,77 @@ def main():
     assert not any(node["id"] == "py:call:helpers.qualified" for node in graph["nodes"])
 
 
+def test_python_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def imported():
+    return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import imported
+
+def local():
+    return 2
+
+def main():
+    local_alias = local
+    imported_alias = imported
+    local_alias()
+    imported_alias()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:app.py:local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:imported"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:local_alias", "py:call:imported_alias"} for node in graph["nodes"])
+
+
+def test_python_ambiguous_function_alias_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+def first():
+    return 1
+
+def second():
+    return 2
+
+def main(flag, first):
+    param_alias = first
+    alias = first
+    if flag:
+        alias = second
+    first()
+    param_alias()
+    alias()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:first" for edge in graph["edges"])
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:param_alias" for edge in graph["edges"]
+    )
+    assert any(edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:alias" for edge in graph["edges"])
+    assert not any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:app.py:first"
+        for edge in graph["edges"]
+    )
+
+
 def test_python_same_class_method_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """

@@ -80,6 +80,8 @@ class PythonCollector(ast.NodeVisitor):
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
         enclosing_class_id = self.scope[-1] if kind == "method" else None
         class_aliases = _function_class_aliases(node, self.known_classes)
+        known_functions = {**self.local_functions, **self.imported_functions}
+        function_aliases, shadowed_functions = _function_aliases(node, known_functions)
         self.scope.append(func_id)
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -89,9 +91,12 @@ class PythonCollector(ast.NodeVisitor):
                         self._method_call_target(call_name, enclosing_class_id)
                         or self._instance_method_call_target(call_name, class_aliases)
                         or self._class_method_call_target(call_name)
-                        or self.local_functions.get(call_name)
-                        or self.imported_functions.get(call_name)
                     )
+                    if not target_id:
+                        if call_name in shadowed_functions:
+                            target_id = function_aliases.get(call_name)
+                        else:
+                            target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
                     if not target_id:
                         target_id = f"py:call:{call_name}"
                         self.graph.add_node(
@@ -339,6 +344,25 @@ def _function_class_aliases(
     return aliases
 
 
+def _function_aliases(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    known_functions: dict[str, str],
+) -> tuple[dict[str, str], set[str]]:
+    visitor = _FunctionAliasVisitor(known_functions)
+    for name in _argument_names(node.args):
+        visitor.assignments.setdefault(name, set()).add(None)
+    for child in node.body:
+        visitor.visit(child)
+
+    aliases: dict[str, str] = {}
+    for name, function_ids in visitor.assignments.items():
+        if len(function_ids) == 1:
+            function_id = next(iter(function_ids))
+            if function_id:
+                aliases[name] = function_id
+    return aliases, set(visitor.assignments)
+
+
 class _ClassAliasVisitor(ast.NodeVisitor):
     def __init__(self, local_classes: dict[str, str]) -> None:
         self.local_classes = local_classes
@@ -395,6 +419,68 @@ class _ClassAliasVisitor(ast.NodeVisitor):
             self.assignments.setdefault(name, set()).add(class_id)
 
 
+class _FunctionAliasVisitor(ast.NodeVisitor):
+    def __init__(self, known_functions: dict[str, str]) -> None:
+        self.known_functions = known_functions
+        self.assignments: dict[str, set[str | None]] = {}
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        function_id = self._reference_target(node.value)
+        for target in node.targets:
+            self._record(target, function_id)
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        function_id = self._reference_target(node.value) if node.value else None
+        self._record(node.target, function_id)
+        if node.value:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._record(node.target, None)
+        self.visit(node.value)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._record(node.target, None)
+        for child in [*node.body, *node.orelse]:
+            self.visit(child)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            if item.optional_vars:
+                self._record(item.optional_vars, None)
+        for child in node.body:
+            self.visit(child)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)
+
+    def _record(self, target: ast.AST, function_id: str | None) -> None:
+        for name in _target_names(target):
+            self.assignments.setdefault(name, set()).add(function_id)
+
+    def _reference_target(self, node: ast.AST) -> str | None:
+        call_name = _call_name(node)
+        if not call_name or call_name in self.assignments:
+            return None
+        return self.known_functions.get(call_name)
+
+
 def _target_names(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Name):
         return [node.id]
@@ -413,6 +499,17 @@ def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) ->
     if not call_name:
         return None
     return local_classes.get(call_name)
+
+
+def _argument_names(args: ast.arguments) -> list[str]:
+    names: list[str] = []
+    for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+        names.append(arg.arg)
+    if args.vararg:
+        names.append(args.vararg.arg)
+    if args.kwarg:
+        names.append(args.kwarg.arg)
+    return names
 
 
 def _module_name(root: Path, path: Path) -> str:
