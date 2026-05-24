@@ -62,6 +62,35 @@ export const main = () => {
     assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:app.ts:helper" for edge in graph["edges"])
 
 
+def test_javascript_function_expression_and_single_param_arrow_calls_resolve(tmp_path: Path) -> None:
+    (tmp_path / "app.js").write_text(
+        """
+const normalize = value => value.trim();
+const render = function (text) {
+  return normalize(text);
+};
+
+export const main = input => render(input);
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:app.js:normalize" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:app.js:render" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:app.js:main" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:app.js:render" and edge["to"] == "js:function:app.js:normalize"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:app.js:render"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:normalize", "js:call:render"} for node in graph["nodes"])
+
+
 def test_typescript_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """
