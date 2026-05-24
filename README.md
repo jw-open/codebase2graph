@@ -79,6 +79,17 @@ python -m code2graph.iterate ../claude-code-source-code \
   --commit-push
 ```
 
+Start the same 20-minute loop as a detached background process:
+
+```bash
+python -m code2graph.loop start ../claude-code-source-code
+python -m code2graph.loop status
+python -m code2graph.loop stop
+```
+
+The detached loop writes `.code2graph-runs/loop.pid` and `.code2graph-runs/loop.log`.
+It commits and pushes progress by default using the `jwpublic` remote configured as `origin`.
+
 Generated graph snapshots go under `.code2graph-runs/`, which is ignored by git. The tracked progress file is `CODE2GRAPH_PROGRESS.md`.
 Each loop also writes `CODE2GRAPH_NEXT_PROMPT.md`, a handoff prompt for the next coding pass. It includes latest graph counts, deltas from the previous snapshot when available, graph-health warnings, test output, and recommended next steps.
 
