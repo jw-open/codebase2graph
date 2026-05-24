@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .builder import GRAPH_BUILDERS, build_graph
+from .prompt import summarize_graph
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,10 +19,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Graph type to generate.",
     )
     parser.add_argument("--output", "-o", help="Write JSON to this file instead of stdout.")
+    parser.add_argument("--summary-output", help="Write graph summary JSON to this file.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON.")
     args = parser.parse_args(argv)
 
     graph = build_graph(args.repo, args.graph).to_dict()
+    if args.summary_output:
+        summary_output = Path(args.summary_output)
+        summary_output.parent.mkdir(parents=True, exist_ok=True)
+        summary_output.write_text(
+            json.dumps(summarize_graph(graph), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     payload = json.dumps(graph, indent=2 if args.pretty else None, sort_keys=True)
     if args.output:
         output = Path(args.output)
@@ -34,4 +43,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

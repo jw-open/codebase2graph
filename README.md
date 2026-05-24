@@ -34,6 +34,17 @@ Output shape:
 python -m code2graph /path/to/repo --graph all --output out/code-graph.json
 ```
 
+Write an actionable graph summary alongside the graph:
+
+```bash
+python -m code2graph /path/to/repo \
+  --graph all \
+  --output out/code-graph.json \
+  --summary-output out/code-graph.summary.json
+```
+
+The summary includes entrypoints, high-fan-in nodes, high-fan-out nodes, and files that only have structural folder links.
+
 Generate one graph type:
 
 ```bash

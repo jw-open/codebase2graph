@@ -7,7 +7,7 @@ from code2graph.builder import build_graph
 from code2graph.cli import main
 from code2graph.iterate import main as iterate_main
 from code2graph import loop
-from code2graph.prompt import build_iteration_prompt
+from code2graph.prompt import build_iteration_prompt, summarize_graph
 
 
 def test_folder_graph_shape(tmp_path: Path) -> None:
@@ -218,6 +218,51 @@ def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
     data = json.loads(output.read_text(encoding="utf-8"))
     assert set(data) == {"nodes", "edges", "current_node_id"}
     assert any(node["id"] == "workflow:npm:build" for node in data["nodes"])
+
+
+def test_graph_summary_reports_entrypoints_hotspots_and_isolated_modules(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"start": "python app.py"}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+def helper():
+    return 1
+
+def main():
+    return helper()
+
+if __name__ == "__main__":
+    main()
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "notes.md").write_text("context only\n", encoding="utf-8")
+
+    summary = summarize_graph(build_graph(tmp_path, "all").to_dict())
+
+    assert any(node["id"] == "workflow:npm:start" for node in summary["entrypoints"])
+    assert any(node["id"] == "workflow:python:app.py" for node in summary["entrypoints"])
+    assert any(node["id"] == "py:function:app.py:helper" for node in summary["high_fan_in"])
+    assert any(node["id"] == "file:notes.md" for node in summary["isolated_modules"])
+
+
+def test_cli_writes_graph_summary_json(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"build": "tsc --noEmit"}}),
+        encoding="utf-8",
+    )
+    output = tmp_path / "graph.json"
+    summary_output = tmp_path / "summary.json"
+
+    code = main([str(tmp_path), "--graph", "all", "--output", str(output), "--summary-output", str(summary_output)])
+
+    assert code == 0
+    summary = json.loads(summary_output.read_text(encoding="utf-8"))
+    assert "high_fan_in" in summary
+    assert "high_fan_out" in summary
+    assert any(node["id"] == "workflow:npm:build" for node in summary["entrypoints"])
 
 
 def test_infra_graph_from_compose_ci_and_cloud_files(tmp_path: Path) -> None:

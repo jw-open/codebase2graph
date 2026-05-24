@@ -28,6 +28,10 @@ def summarize_graph(graph: dict[str, object]) -> dict[str, object]:
     labels: dict[str, int] = {}
     node_ids: set[str] = set()
     linked_node_ids: set[str] = set()
+    nodes_by_id: dict[str, dict[str, object]] = {}
+    incoming_counts: dict[str, int] = {}
+    outgoing_counts: dict[str, int] = {}
+    semantic_edge_node_ids: set[str] = set()
     dangling_edges = 0
 
     if isinstance(nodes, list):
@@ -37,6 +41,7 @@ def summarize_graph(graph: dict[str, object]) -> dict[str, object]:
             node_id = str(node.get("id", ""))
             if node_id:
                 node_ids.add(node_id)
+                nodes_by_id[node_id] = node
             attrs = node.get("attributes", {})
             if isinstance(attrs, dict):
                 kind = str(attrs.get("kind", "unknown"))
@@ -49,10 +54,14 @@ def summarize_graph(graph: dict[str, object]) -> dict[str, object]:
             from_id = str(edge.get("from", ""))
             to_id = str(edge.get("to", ""))
             linked_node_ids.update({from_id, to_id})
+            outgoing_counts[from_id] = outgoing_counts.get(from_id, 0) + 1
+            incoming_counts[to_id] = incoming_counts.get(to_id, 0) + 1
             if from_id not in node_ids or to_id not in node_ids:
                 dangling_edges += 1
             label = str(edge.get("label", "unknown"))
             labels[label] = labels.get(label, 0) + 1
+            if label != "contains":
+                semantic_edge_node_ids.update({from_id, to_id})
 
     isolated = node_ids - linked_node_ids
     isolated.discard(str(graph.get("current_node_id", "")))
@@ -63,7 +72,69 @@ def summarize_graph(graph: dict[str, object]) -> dict[str, object]:
         "edge_labels": dict(sorted(labels.items())),
         "dangling_edge_count": dangling_edges,
         "isolated_node_count": len(isolated),
+        "entrypoints": _entrypoints(nodes_by_id),
+        "high_fan_in": _ranked_nodes(nodes_by_id, incoming_counts),
+        "high_fan_out": _ranked_nodes(nodes_by_id, outgoing_counts),
+        "isolated_modules": _isolated_modules(nodes_by_id, semantic_edge_node_ids),
     }
+
+
+def _node_summary(node_id: str, node: dict[str, object], *, count: int | None = None) -> dict[str, object]:
+    attrs = node.get("attributes", {})
+    attributes = attrs if isinstance(attrs, dict) else {}
+    summary: dict[str, object] = {
+        "id": node_id,
+        "label": str(node.get("label", "")),
+        "kind": str(attributes.get("kind", "unknown")),
+    }
+    path = attributes.get("path")
+    if path is not None:
+        summary["path"] = str(path)
+    if count is not None:
+        summary["count"] = count
+    return summary
+
+
+def _entrypoints(nodes_by_id: dict[str, dict[str, object]], limit: int = 12) -> list[dict[str, object]]:
+    entrypoint_kinds = {
+        "ci_workflow",
+        "compose_service",
+        "make_target",
+        "npm_script",
+        "python_entrypoint",
+    }
+    entries: list[dict[str, object]] = []
+    for node_id, node in nodes_by_id.items():
+        attrs = node.get("attributes", {})
+        if isinstance(attrs, dict) and attrs.get("kind") in entrypoint_kinds:
+            entries.append(_node_summary(node_id, node))
+    return sorted(entries, key=lambda item: (str(item.get("kind", "")), str(item.get("id", ""))))[:limit]
+
+
+def _ranked_nodes(
+    nodes_by_id: dict[str, dict[str, object]],
+    counts: dict[str, int],
+    limit: int = 8,
+) -> list[dict[str, object]]:
+    ranked = [
+        _node_summary(node_id, nodes_by_id[node_id], count=count)
+        for node_id, count in counts.items()
+        if count > 0 and node_id in nodes_by_id
+    ]
+    return sorted(ranked, key=lambda item: (-int(item["count"]), str(item["id"])))[:limit]
+
+
+def _isolated_modules(
+    nodes_by_id: dict[str, dict[str, object]],
+    semantic_edge_node_ids: set[str],
+    limit: int = 12,
+) -> list[dict[str, object]]:
+    modules: list[dict[str, object]] = []
+    for node_id, node in nodes_by_id.items():
+        attrs = node.get("attributes", {})
+        if isinstance(attrs, dict) and attrs.get("kind") == "file" and node_id not in semantic_edge_node_ids:
+            modules.append(_node_summary(node_id, node))
+    return sorted(modules, key=lambda item: str(item.get("path", item["id"])))[:limit]
 
 
 def find_previous_snapshot(output_dir: Path, current_snapshot: Path, repo_name: str, graph_type: str) -> Path | None:
@@ -96,6 +167,19 @@ def _top_counts(counts: object, limit: int = 8) -> str:
         return "- none"
     ordered = sorted(((str(k), int(v)) for k, v in counts.items()), key=lambda item: (-item[1], item[0]))
     return "\n".join(f"- {name}: {count}" for name, count in ordered[:limit])
+
+
+def _top_nodes(nodes: object, limit: int = 8) -> str:
+    if not isinstance(nodes, list) or not nodes:
+        return "- none"
+    lines: list[str] = []
+    for node in nodes[:limit]:
+        if not isinstance(node, dict):
+            continue
+        path = f" `{node['path']}`" if node.get("path") else ""
+        count = f" ({node['count']})" if node.get("count") is not None else ""
+        lines.append(f"- {node.get('label', '')} [{node.get('kind', 'unknown')}]{path}{count}")
+    return "\n".join(lines) if lines else "- none"
 
 
 def _format_test_result(result: TestResult | None) -> str:
@@ -167,6 +251,14 @@ def build_iteration_prompt(
         f"{_top_counts(summary.get('node_kinds'))}\n\n"
         "## Edge Labels\n\n"
         f"{_top_counts(summary.get('edge_labels'))}\n\n"
+        "## Entrypoints\n\n"
+        f"{_top_nodes(summary.get('entrypoints'))}\n\n"
+        "## High Fan In\n\n"
+        f"{_top_nodes(summary.get('high_fan_in'))}\n\n"
+        "## High Fan Out\n\n"
+        f"{_top_nodes(summary.get('high_fan_out'))}\n\n"
+        "## Isolated Modules\n\n"
+        f"{_top_nodes(summary.get('isolated_modules'))}\n\n"
         "## Issues And Bugs To Check\n\n"
         + "\n".join(f"- {warning}" for warning in warnings)
         + "\n\n"
