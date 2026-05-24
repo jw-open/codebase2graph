@@ -18,6 +18,8 @@ class PythonCollector(ast.NodeVisitor):
         known_methods: dict[tuple[str, str], str],
         imported_functions: dict[str, str],
         imported_classes: dict[str, str],
+        module_function_aliases: dict[str, str],
+        module_class_aliases: dict[str, str],
         function_index: dict[tuple[str, str], str],
         class_index: dict[tuple[str, str], str],
     ) -> None:
@@ -30,6 +32,8 @@ class PythonCollector(ast.NodeVisitor):
         self.known_methods = known_methods
         self.imported_functions = imported_functions
         self.imported_classes = imported_classes
+        self.module_function_aliases = module_function_aliases
+        self.module_class_aliases = module_class_aliases
         self.function_index = function_index
         self.class_index = class_index
         self.current_module = _module_name(root, path)
@@ -95,12 +99,18 @@ class PythonCollector(ast.NodeVisitor):
             self.current_module,
             self.class_index,
         )
-        known_classes = {**self.imported_classes, **self.local_classes, **scoped_imported_classes}
+        known_classes = {
+            **self.imported_classes,
+            **self.module_class_aliases,
+            **self.local_classes,
+            **scoped_imported_classes,
+        }
         class_aliases = _function_class_aliases(node, known_classes)
         nested_functions = self._nested_function_ids(node)
         enclosing_functions = _merge_scopes(self.lexical_function_scopes)
         known_functions = {
             **self.imported_functions,
+            **self.module_function_aliases,
             **self.local_functions,
             **scoped_imported_functions,
             **enclosing_functions,
@@ -128,6 +138,7 @@ class PythonCollector(ast.NodeVisitor):
                             or nested_functions.get(call_name)
                             or enclosing_functions.get(call_name)
                             or self.local_functions.get(call_name)
+                            or self.module_function_aliases.get(call_name)
                             or self.imported_functions.get(call_name)
                         )
                 if not target_id:
@@ -225,15 +236,31 @@ def build_python_graph(root: Path) -> Graph:
     class_index = _project_class_index(root, parsed_modules)
     method_index = _project_method_index(root, parsed_modules)
     for path, tree in parsed_modules:
+        local_functions = _local_function_ids(root, path, tree)
+        local_classes = _local_class_ids(root, path, tree)
+        imported_functions = _imported_function_ids(root, path, tree, function_index)
+        imported_classes = _imported_class_ids(root, path, tree, class_index)
+        module_function_aliases = _module_function_aliases(
+            tree.body,
+            {**imported_functions, **local_functions},
+            reserved=set(local_functions),
+        )
+        module_class_aliases = _module_class_aliases(
+            tree.body,
+            {**imported_classes, **local_classes},
+            reserved=set(local_classes),
+        )
         PythonCollector(
             root,
             path,
             graph,
-            _local_function_ids(root, path, tree),
-            _local_class_ids(root, path, tree),
+            local_functions,
+            local_classes,
             method_index,
-            _imported_function_ids(root, path, tree, function_index),
-            _imported_class_ids(root, path, tree, class_index),
+            imported_functions,
+            imported_classes,
+            module_function_aliases,
+            module_class_aliases,
             function_index,
             class_index,
         ).visit(tree)
@@ -454,6 +481,42 @@ def _function_aliases(
     return aliases, set(visitor.assignments)
 
 
+def _module_function_aliases(
+    body: list[ast.stmt],
+    known_functions: dict[str, str],
+    *,
+    reserved: set[str],
+) -> dict[str, str]:
+    aliases, shadowed = _aliases_from_body(body, _FunctionAliasVisitor(known_functions))
+    return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
+
+
+def _module_class_aliases(
+    body: list[ast.stmt],
+    known_classes: dict[str, str],
+    *,
+    reserved: set[str],
+) -> dict[str, str]:
+    aliases, shadowed = _aliases_from_body(body, _ClassAliasReferenceVisitor(known_classes))
+    return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
+
+
+def _aliases_from_body(
+    body: list[ast.stmt],
+    visitor: _FunctionAliasVisitor | _ClassAliasReferenceVisitor,
+) -> tuple[dict[str, str], set[str]]:
+    for child in body:
+        visitor.visit(child)
+
+    aliases: dict[str, str] = {}
+    for name, target_ids in visitor.assignments.items():
+        if len(target_ids) == 1:
+            target_id = next(iter(target_ids))
+            if target_id:
+                aliases[name] = target_id
+    return aliases, set(visitor.assignments)
+
+
 def _merge_scopes(scopes: list[dict[str, str]]) -> dict[str, str]:
     merged: dict[str, str] = {}
     for scope in scopes:
@@ -577,6 +640,18 @@ class _FunctionAliasVisitor(ast.NodeVisitor):
         if not call_name or call_name in self.assignments:
             return None
         return self.known_functions.get(call_name)
+
+
+class _ClassAliasReferenceVisitor(_FunctionAliasVisitor):
+    def __init__(self, known_classes: dict[str, str]) -> None:
+        self.known_classes = known_classes
+        self.assignments: dict[str, set[str | None]] = {}
+
+    def _reference_target(self, node: ast.AST) -> str | None:
+        call_name = _call_name(node)
+        if not call_name or call_name in self.assignments:
+            return None
+        return self.known_classes.get(call_name)
 
 
 class _ScopeCallVisitor(ast.NodeVisitor):
