@@ -234,7 +234,7 @@ def build_python_graph(root: Path) -> Graph:
 
     function_index = _project_function_index(root, parsed_modules)
     class_index = _project_class_index(root, parsed_modules)
-    method_index = _project_method_index(root, parsed_modules)
+    method_index = _project_method_index(root, parsed_modules, class_index)
     for path, tree in parsed_modules:
         local_functions = _local_function_ids(root, path, tree)
         local_classes = _local_class_ids(root, path, tree)
@@ -285,11 +285,71 @@ def _project_class_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> 
     return class_index
 
 
-def _project_method_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> dict[tuple[str, str], str]:
+def _project_method_index(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    class_index: dict[tuple[str, str], str],
+) -> dict[tuple[str, str], str]:
     method_index: dict[tuple[str, str], str] = {}
     for path, tree in modules:
         method_index.update(_local_method_ids(root, path, tree))
+    class_bases = _project_class_base_ids(root, modules, class_index)
+    for class_id in sorted(class_bases):
+        _add_inherited_methods(class_id, method_index, class_bases, set())
     return method_index
+
+
+def _project_class_base_ids(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    class_index: dict[tuple[str, str], str],
+) -> dict[str, list[str]]:
+    class_bases: dict[str, list[str]] = {}
+    for path, tree in modules:
+        local_classes = _local_class_ids(root, path, tree)
+        imported_classes = _imported_class_ids(root, path, tree, class_index)
+        module_class_aliases = _module_class_aliases(
+            tree.body,
+            {**imported_classes, **local_classes},
+            reserved=set(local_classes),
+        )
+        known_classes = {**imported_classes, **module_class_aliases, **local_classes}
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            class_id = local_classes.get(node.name)
+            if not class_id:
+                continue
+            bases: list[str] = []
+            for base in node.bases:
+                base_name = _call_name(base)
+                if not base_name:
+                    continue
+                base_id = known_classes.get(base_name)
+                if base_id and base_id != class_id:
+                    bases.append(base_id)
+            if bases:
+                class_bases[class_id] = bases
+    return class_bases
+
+
+def _add_inherited_methods(
+    class_id: str,
+    method_index: dict[tuple[str, str], str],
+    class_bases: dict[str, list[str]],
+    visiting: set[str],
+) -> None:
+    if class_id in visiting:
+        return
+    visiting.add(class_id)
+    method_names = {method_name for owner_id, method_name in method_index if owner_id == class_id}
+    for base_id in class_bases.get(class_id, []):
+        _add_inherited_methods(base_id, method_index, class_bases, visiting)
+        for (owner_id, method_name), method_id in list(method_index.items()):
+            if owner_id == base_id and method_name not in method_names:
+                method_index[(class_id, method_name)] = method_id
+                method_names.add(method_name)
+    visiting.remove(class_id)
 
 
 def _imported_function_ids(

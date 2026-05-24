@@ -599,6 +599,66 @@ def main():
     assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
 
 
+def test_python_inherited_instance_method_calls_resolve_to_base_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Base:
+    def helper(self):
+        return 1
+
+class Child(Base):
+    pass
+
+def main():
+    service = Child()
+    return service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Base.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
+
+
+def test_python_imported_inherited_method_calls_resolve_to_base_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Base:
+    def helper(self):
+        return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from service import Base
+
+class Child(Base):
+    pass
+
+def main():
+    service = Child()
+    return service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] == "py:method:service.py:Base.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
+
+
 def test_python_imported_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
