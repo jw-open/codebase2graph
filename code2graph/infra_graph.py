@@ -14,11 +14,58 @@ URL_REF_RE = re.compile(r"https?://([A-Za-z0-9_.-]+)(?::\d+)?")
 ENV_REF_RE = re.compile(r"\b([A-Z][A-Z0-9_]*(?:URL|URI|HOST|ENDPOINT))\s*[:=]\s*['\"]?([^'\"\s]+)")
 PROVIDER_RE = re.compile(r"\bprovider\s+\"([A-Za-z0-9_-]+)\"")
 RESOURCE_RE = re.compile(r"\bresource\s+\"([A-Za-z0-9_-]+)_([A-Za-z0-9_-]+)\"")
+RESOURCE_BLOCK_RE = re.compile(r'\bresource\s+"([A-Za-z0-9_-]+)"\s+"([A-Za-z0-9_.-]+)"\s*\{(?P<body>.*?)\n\}', re.S)
+ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$", re.M)
+
+AWS_SERVICE_ALIASES = {
+    "ami": "ec2",
+    "autoscaling": "ec2",
+    "cloudwatch": "cloudwatch",
+    "db": "rds",
+    "dynamodb": "dynamodb",
+    "ebs": "ebs",
+    "ec2": "ec2",
+    "ecr": "ecr",
+    "ecs": "ecs",
+    "efs": "efs",
+    "eks": "eks",
+    "iam": "iam",
+    "instance": "ec2",
+    "lambda": "lambda",
+    "lb": "elb",
+    "rds": "rds",
+    "s3": "s3",
+    "secret": "secretsmanager",
+    "secretsmanager": "secretsmanager",
+    "security": "ec2_security_group",
+    "vpc": "vpc",
+}
+CONFIG_KEYS = {
+    "acl",
+    "ami",
+    "bucket",
+    "cluster_name",
+    "desired_capacity",
+    "encrypted",
+    "engine",
+    "engine_version",
+    "image",
+    "instance_type",
+    "name",
+    "region",
+    "repository_url",
+    "size",
+    "storage_encrypted",
+    "version",
+    "volume_size",
+}
 
 
 def build_infra_graph(root: Path) -> Graph:
     graph = Graph()
     graph.add_node("infra-root", "Infrastructure", attributes={"kind": "infra_root", "path": "."})
+    graph.add_node("infra:environment:local", "Local", attributes={"kind": "deployment_environment", "environment": "local"})
+    graph.add_edge("infra-root", "infra:environment:local", "has_environment")
 
     for path in iter_files(root):
         rel = path.relative_to(root).as_posix()
@@ -54,15 +101,18 @@ def _add_compose(graph: Graph, root: Path, path: Path) -> None:
     services = _parse_compose_services(text)
     for service, attrs in services.items():
         service_id = f"infra:service:{service}"
-        graph.add_node(service_id, service, attributes={"kind": "service", "source": "compose", "path": rel})
+        attrs_out = {"kind": "service", "source": "compose", "path": rel, "deployment": "local", "runtime": "docker_compose"}
+        attrs_out.update({key: value for key, value in attrs.items() if isinstance(value, str) and value})
+        graph.add_node(service_id, service, attributes=attrs_out)
         graph.add_edge(file_id, service_id, "defines_service")
+        graph.add_edge("infra:environment:local", service_id, "runs")
         for port in attrs.get("ports", []):
             port_id = f"infra:port:{service}:{port}"
             graph.add_node(port_id, port, attributes={"kind": "port", "service": service, "path": rel})
             graph.add_edge(service_id, port_id, "exposes")
         for dep in attrs.get("depends_on", []):
             dep_id = f"infra:service:{dep}"
-            graph.add_node(dep_id, dep, attributes={"kind": "service", "source": "compose", "path": rel})
+            graph.add_node(dep_id, dep, attributes={"kind": "service", "source": "compose", "path": rel, "deployment": "local"})
             graph.add_edge(service_id, dep_id, "depends_on")
         for ref in attrs.get("refs", []):
             target = _target_id(ref)
@@ -70,8 +120,8 @@ def _add_compose(graph: Graph, root: Path, path: Path) -> None:
             graph.add_edge(service_id, target, "communicates_with")
 
 
-def _parse_compose_services(text: str) -> dict[str, dict[str, list[str]]]:
-    services: dict[str, dict[str, list[str]]] = {}
+def _parse_compose_services(text: str) -> dict[str, dict[str, list[str] | str]]:
+    services: dict[str, dict[str, list[str] | str]] = {}
     in_services = False
     current: str | None = None
     section: str | None = None
@@ -99,6 +149,11 @@ def _parse_compose_services(text: str) -> dict[str, dict[str, list[str]]]:
                 services[current]["depends_on"].extend(_inline_list(inline))
             elif section == "ports":
                 services[current]["ports"].extend(_inline_list(inline))
+            elif section == "image" and inline.strip():
+                services[current]["image"] = inline.strip().strip("'\"")
+                services[current]["image_version"] = _image_version(str(services[current]["image"]))
+            elif section == "build" and inline.strip():
+                services[current]["build"] = inline.strip().strip("'\"")
             continue
         item_match = re.match(r"^\s{6}-\s*['\"]?([^'\"\s]+)", line)
         if item_match and section in {"depends_on", "ports"}:
@@ -116,8 +171,12 @@ def _add_dockerfile(graph: Graph, root: Path, path: Path) -> None:
     attrs = {"kind": "container_image", "path": rel}
     if base:
         attrs["base_image"] = base
+        attrs["base_version"] = _image_version(base)
+        attrs["deployment"] = "local"
     graph.add_node(node_id, path.name, attributes=attrs)
     graph.add_edge("infra-root", node_id, "builds")
+    graph.add_node("infra:environment:local", "Local", attributes={"kind": "deployment_environment", "environment": "local"})
+    graph.add_edge("infra:environment:local", node_id, "builds")
 
 
 def _looks_like_kubernetes(path: Path) -> bool:
@@ -136,7 +195,12 @@ def _add_kubernetes(graph: Graph, root: Path, path: Path) -> None:
         if not kind or not name or kind not in K8S_KINDS:
             continue
         node_id = f"infra:k8s:{kind.lower()}:{name}"
-        graph.add_node(node_id, name, attributes={"kind": f"k8s_{kind.lower()}", "path": rel})
+        attrs = {"kind": f"k8s_{kind.lower()}", "path": rel, "deployment": "cluster", "runtime": "kubernetes"}
+        image = _yaml_nested_scalar(doc, "containers", "image") or _yaml_scalar(doc, "image")
+        if image:
+            attrs["image"] = image
+            attrs["image_version"] = _image_version(image)
+        graph.add_node(node_id, name, attributes=attrs)
         graph.add_edge("infra-root", node_id, "deploys")
         if kind in {"Service", "Ingress"}:
             app = _yaml_nested_scalar(doc, "selector", "app") or _yaml_nested_scalar(doc, "matchLabels", "app")
@@ -206,12 +270,29 @@ def _add_terraform(graph: Graph, root: Path, path: Path) -> None:
     text = read_text(path)
     for provider in PROVIDER_RE.findall(text):
         provider_id = f"infra:cloud:{provider}"
-        graph.add_node(provider_id, provider, attributes={"kind": "cloud_provider", "path": rel})
+        graph.add_node(provider_id, provider, attributes={"kind": "cloud_provider", "path": rel, "deployment": "cloud"})
         graph.add_edge("infra-root", provider_id, "uses_provider")
-    for provider, resource in RESOURCE_RE.findall(text):
-        resource_id = f"infra:cloud_resource:{provider}:{resource}"
-        graph.add_node(resource_id, resource, attributes={"kind": "cloud_resource", "provider": provider, "path": rel})
+    for match in RESOURCE_BLOCK_RE.finditer(text):
+        resource_type, name = match.group(1), match.group(2)
+        provider, resource = _split_terraform_resource_type(resource_type)
+        service = _cloud_service(provider, resource)
+        resource_id = f"infra:cloud_resource:{provider}:{resource}:{name}"
+        attrs = {
+            "kind": "cloud_resource",
+            "provider": provider,
+            "cloud_service": service,
+            "resource_type": resource_type,
+            "resource_name": name,
+            "path": rel,
+            "deployment": "cloud",
+        }
+        attrs.update(_terraform_config(match.group("body")))
+        graph.add_node(resource_id, name, attributes=attrs)
         graph.add_edge(f"infra:cloud:{provider}", resource_id, "provisions")
+        service_id = f"infra:cloud_service:{provider}:{service}"
+        graph.add_node(service_id, service, attributes={"kind": "cloud_service", "provider": provider, "path": rel})
+        graph.add_edge(f"infra:cloud:{provider}", service_id, "offers")
+        graph.add_edge(service_id, resource_id, "contains")
 
 
 def _add_serverless(graph: Graph, root: Path, path: Path) -> None:
@@ -224,8 +305,9 @@ def _add_serverless(graph: Graph, root: Path, path: Path) -> None:
     graph.add_edge("infra-root", service_id, "deploys")
     if provider:
         provider_id = f"infra:cloud:{provider}"
-        graph.add_node(provider_id, provider, attributes={"kind": "cloud_provider", "path": rel})
+        graph.add_node(provider_id, provider, attributes={"kind": "cloud_provider", "path": rel, "deployment": "cloud"})
         graph.add_edge(service_id, provider_id, "runs_on")
+        graph.add_node(service_id, service, attributes={"deployment": "cloud", "provider": provider})
 
 
 def _add_integration_refs(graph: Graph, root: Path, path: Path) -> None:
@@ -254,6 +336,47 @@ def _extract_refs(text: str) -> list[str]:
 def _target_id(ref: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", ref).strip("-").lower()
     return f"infra:integration:{normalized or 'unknown'}"
+
+
+def _cloud_service(provider: str, resource: str) -> str:
+    if provider == "aws":
+        first = resource.split("_", 1)[0]
+        return AWS_SERVICE_ALIASES.get(first, first)
+    if provider in {"google", "google-beta"}:
+        return resource.split("_", 1)[0]
+    if provider in {"azurerm", "azuread"}:
+        return resource.split("_", 1)[0]
+    return resource.split("_", 1)[0]
+
+
+def _split_terraform_resource_type(resource_type: str) -> tuple[str, str]:
+    known_providers = ("aws", "google-beta", "google", "azurerm", "azuread")
+    for provider in known_providers:
+        prefix = f"{provider}_"
+        if resource_type.startswith(prefix):
+            return provider, resource_type[len(prefix) :]
+    provider, _, resource = resource_type.partition("_")
+    return provider, resource or resource_type
+
+
+def _terraform_config(body: str) -> dict[str, str]:
+    config: dict[str, str] = {}
+    for key, raw_value in ASSIGNMENT_RE.findall(body):
+        if key not in CONFIG_KEYS:
+            continue
+        value = raw_value.strip().strip('"')
+        if value and not value.startswith("{") and not value.startswith("["):
+            config[f"config_{key}"] = value
+    return config
+
+
+def _image_version(image: str) -> str:
+    if "@" in image:
+        return image.split("@", 1)[1]
+    last = image.rsplit("/", 1)[-1]
+    if ":" in last:
+        return last.rsplit(":", 1)[1]
+    return "latest"
 
 
 def _inline_list(value: str) -> list[str]:

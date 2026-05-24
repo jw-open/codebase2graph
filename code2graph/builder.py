@@ -8,6 +8,7 @@ from .folder_graph import build_folder_graph
 from .infra_graph import build_infra_graph
 from .models import Graph
 from .schema_graph import build_schema_graph
+from .security_graph import build_security_graph
 from .workflow_graph import build_workflow_graph
 
 GRAPH_BUILDERS = {
@@ -17,6 +18,7 @@ GRAPH_BUILDERS = {
     "schema": build_schema_graph,
     "workflow": build_workflow_graph,
     "infra": build_infra_graph,
+    "security": build_security_graph,
 }
 
 

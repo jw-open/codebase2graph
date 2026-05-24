@@ -251,7 +251,15 @@ jobs:
     (tmp_path / "main.tf").write_text(
         """
 provider "aws" {}
-resource "aws_lambda_function" "worker" {}
+resource "aws_lambda_function" "worker" {
+  runtime = "python3.12"
+}
+resource "aws_s3_bucket" "assets" {
+  bucket = "assets-prod"
+}
+resource "aws_eks_cluster" "app" {
+  version = "1.30"
+}
 """,
         encoding="utf-8",
     )
@@ -265,7 +273,58 @@ resource "aws_lambda_function" "worker" {}
     assert any(node["id"] == "infra:pipeline:.github/workflows/deploy.yml" for node in graph["nodes"])
     assert any(node["id"] == "infra:ci_job:.github/workflows/deploy.yml:deploy" for node in graph["nodes"])
     assert any(node["id"] == "infra:cloud:aws" for node in graph["nodes"])
+    assert any(
+        node["id"] == "infra:cloud_service:aws:s3"
+        for node in graph["nodes"]
+    )
+    assert any(
+        node["id"] == "infra:cloud_resource:aws:eks_cluster:app"
+        and node["attributes"].get("cloud_service") == "eks"
+        and node["attributes"].get("config_version") == "1.30"
+        for node in graph["nodes"]
+    )
+    assert any(
+        node["id"] == "infra:service:api"
+        and node["attributes"].get("deployment") == "local"
+        and node["attributes"].get("runtime") == "docker_compose"
+        for node in graph["nodes"]
+    )
     assert any(node["id"] == "infra:dependency:npm:next" for node in graph["nodes"])
+
+
+def test_security_graph_detects_risks_without_secret_values(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text(
+        """
+OPENAI_API_KEY=sk-test-secret
+INTERNAL_URL=http://api.example.com
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "Dockerfile").write_text(
+        """
+FROM python:latest
+RUN echo ok
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.tf").write_text(
+        """
+resource "aws_s3_bucket" "assets" {
+  acl = "public-read"
+}
+resource "aws_iam_policy" "wide" {
+  policy = jsonencode({ Action = "*", Resource = "*" })
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "security").to_dict()
+
+    risks = [node for node in graph["nodes"] if node["attributes"].get("kind") == "security_risk"]
+    risk_types = {node["attributes"]["risk_type"] for node in risks}
+    assert {"hardcoded_secret", "plaintext_http", "unpinned_image", "public_storage", "wildcard_iam"}.issubset(risk_types)
+    assert all("sk-test-secret" not in json.dumps(node) for node in risks)
 
 
 def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
