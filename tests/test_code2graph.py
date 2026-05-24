@@ -6,7 +6,7 @@ from pathlib import Path
 from code2graph.builder import build_graph
 from code2graph.cli import main
 from code2graph.iterate import main as iterate_main
-from code2graph.loop import main as loop_main
+from code2graph import loop
 from code2graph.prompt import build_iteration_prompt
 
 
@@ -159,5 +159,7 @@ def test_iteration_prompt_includes_graph_health_and_tests(tmp_path: Path) -> Non
     assert "jw-open <176761431+jw-open@users.noreply.github.com>" in prompt
 
 
-def test_loop_status_without_pid_is_not_running() -> None:
-    assert loop_main(["status"]) == 1
+def test_loop_status_without_pid_is_not_running(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(loop, "_runtime_path", lambda name: tmp_path / name)
+
+    assert loop.main(["status"]) == 1
