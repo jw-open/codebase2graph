@@ -178,7 +178,8 @@ def build_iteration_prompt(
         "## Commit Discipline\n\n"
         "- Use `jw-open <176761431+jw-open@users.noreply.github.com>`.\n"
         "- Push to `jwpublic:jw-open/code2graph.git` `main`.\n"
-        "- Report the commit hash and test result back to Discord.\n"
+        "- Commit only source, tests, docs, and packaging changes that improve the tool.\n"
+        "- Do not commit generated snapshots or timestamp-only progress updates.\n"
     )
 
 
@@ -215,7 +216,8 @@ def build_action_prompt(context_prompt: str, repo_root: Path) -> str:
    graph correctness or add missing coverage over documentation or cleanup.
 3. Implement it: write real, working Python code in `code2graph/`.
 4. Run `python -m pytest -q` and fix any failures before committing.
-5. Commit ONLY source/test/doc files — never commit `.code2graph-runs/*.json` snapshots.
+5. Commit ONLY source/test/doc/package files — never commit `.code2graph-runs/*.json`,
+   `CODE2GRAPH_PROGRESS.md`, or `CODE2GRAPH_NEXT_PROMPT.md`.
 6. Use this git identity for commits:
    - name: `jw-open`
    - email: `176761431+jw-open@users.noreply.github.com`

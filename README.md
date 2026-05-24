@@ -69,7 +69,7 @@ Run one iteration and write a progress report:
 python -m code2graph.iterate ../claude-code-source-code --graph all
 ```
 
-Run every 20 minutes, commit the progress report with the `jwpublic` identity, and push `main`:
+Run every 20 minutes without invoking Codex. This mode only regenerates local context and can commit the progress report:
 
 ```bash
 python -m code2graph.iterate ../claude-code-source-code \
@@ -79,7 +79,7 @@ python -m code2graph.iterate ../claude-code-source-code \
   --commit-push
 ```
 
-Start the same 20-minute loop as a detached background process:
+Start the autonomous 20-minute Codex loop as a detached background process:
 
 ```bash
 python -m code2graph.loop start ../claude-code-source-code
@@ -88,10 +88,11 @@ python -m code2graph.loop stop
 ```
 
 The detached loop writes `.code2graph-runs/loop.pid` and `.code2graph-runs/loop.log`.
-It commits and pushes progress by default using the `jwpublic` remote configured as `origin`.
+It invokes the local `codex` CLI every 20 minutes by default, using `~/.codex` credentials/config, asks Codex to implement one focused package improvement, runs tests, commits real source/test/doc/package changes with the `jwpublic` identity, and pushes `origin main`.
 
 Generated graph snapshots go under `.code2graph-runs/`, which is ignored by git. The tracked progress file is `CODE2GRAPH_PROGRESS.md`.
 Each loop also writes `CODE2GRAPH_NEXT_PROMPT.md`, a handoff prompt for the next coding pass. It includes latest graph counts, deltas from the previous snapshot when available, graph-health warnings, test output, and recommended next steps.
+The autonomous loop does not commit generated snapshots, prompt handoff files, or timestamp-only progress updates.
 
 By default the loop runs `python -m pytest -q` after generating the graph. Override or disable that with:
 
@@ -109,6 +110,21 @@ To report each loop to a bot or webhook, pass a command that reads the progress 
 python -m code2graph.iterate ../claude-code-source-code \
   --iterations 0 \
   --report-command './scripts/post-progress-to-discord.sh'
+```
+
+Or set a Discord webhook directly:
+
+```bash
+export CODE2GRAPH_DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
+python -m code2graph.loop start ../claude-code-source-code
+```
+
+Useful loop controls:
+
+```bash
+python -m code2graph.loop start ../claude-code-source-code --no-codex
+python -m code2graph.loop start ../claude-code-source-code --codex-bin /home/jwang/.npm-global/bin/codex
+python -m code2graph.loop start ../claude-code-source-code --codex-timeout-seconds 1200
 ```
 
 ## Notes

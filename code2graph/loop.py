@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,9 +64,28 @@ def _build_iterate_command(args: argparse.Namespace) -> list[str]:
     ]
     if args.commit_push:
         command.append("--commit-push")
+    if args.codex:
+        command.append("--codex")
+    codex_bin = args.codex_bin or shutil.which("codex") or str(Path.home() / ".npm-global" / "bin" / "codex")
+    if codex_bin:
+        command.extend(["--codex-bin", codex_bin])
+    if args.codex_timeout_seconds:
+        command.extend(["--codex-timeout-seconds", str(args.codex_timeout_seconds)])
+    if args.discord_webhook_url:
+        command.extend(["--discord-webhook-url", args.discord_webhook_url])
     if args.report_command:
         command.extend(["--report-command", args.report_command])
     return command
+
+
+def _loop_env() -> dict[str, str]:
+    env = os.environ.copy()
+    extra_paths = [
+        str(Path.home() / ".npm-global" / "bin"),
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
+    return env
 
 
 def start(args: argparse.Namespace) -> int:
@@ -87,6 +107,7 @@ def start(args: argparse.Namespace) -> int:
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=_loop_env(),
         )
     pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
     print(f"started code2graph loop pid {process.pid}; log: {log_file}")
@@ -128,9 +149,13 @@ def main(argv: list[str] | None = None) -> int:
     start_parser.add_argument("--report-file", default="CODE2GRAPH_PROGRESS.md")
     start_parser.add_argument("--prompt-file", default="CODE2GRAPH_NEXT_PROMPT.md")
     start_parser.add_argument("--report-command")
+    start_parser.add_argument("--discord-webhook-url")
     start_parser.add_argument("--test-command", default="python -m pytest -q")
+    start_parser.add_argument("--codex-bin")
+    start_parser.add_argument("--codex-timeout-seconds", type=int, default=900)
+    start_parser.add_argument("--no-codex", dest="codex", action="store_false")
     start_parser.add_argument("--no-commit-push", dest="commit_push", action="store_false")
-    start_parser.set_defaults(func=start, commit_push=True)
+    start_parser.set_defaults(func=start, commit_push=True, codex=True)
 
     status_parser = subparsers.add_parser("status", help="Show whether the loop is running.")
     status_parser.set_defaults(func=status)

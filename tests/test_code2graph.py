@@ -163,3 +163,27 @@ def test_loop_status_without_pid_is_not_running(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(loop, "_runtime_path", lambda name: tmp_path / name)
 
     assert loop.main(["status"]) == 1
+
+
+def test_loop_start_command_defaults_to_codex(tmp_path: Path) -> None:
+    class Args:
+        repo = str(tmp_path)
+        graph = "all"
+        interval_minutes = 20.0
+        output_dir = ".code2graph-runs"
+        report_file = "CODE2GRAPH_PROGRESS.md"
+        prompt_file = "CODE2GRAPH_NEXT_PROMPT.md"
+        test_command = "python -m pytest -q"
+        commit_push = True
+        codex = True
+        codex_bin = "/tmp/codex"
+        codex_timeout_seconds = 900
+        discord_webhook_url = None
+        report_command = None
+
+    command = loop._build_iterate_command(Args())
+
+    assert "--codex" in command
+    assert "--codex-bin" in command
+    assert "/tmp/codex" in command
+    assert "--commit-push" in command
