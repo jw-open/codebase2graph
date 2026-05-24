@@ -88,6 +88,7 @@ class PythonCollector(ast.NodeVisitor):
                     target_id = (
                         self._method_call_target(call_name, enclosing_class_id)
                         or self._instance_method_call_target(call_name, class_aliases)
+                        or self._class_method_call_target(call_name)
                         or self.local_functions.get(call_name)
                         or self.imported_functions.get(call_name)
                     )
@@ -115,6 +116,15 @@ class PythonCollector(ast.NodeVisitor):
         if not receiver or not method_name or "." in method_name:
             return None
         class_id = class_aliases.get(receiver)
+        if not class_id:
+            return None
+        return self.known_methods.get((class_id, method_name))
+
+    def _class_method_call_target(self, call_name: str) -> str | None:
+        receiver, _, method_name = call_name.rpartition(".")
+        if not receiver or not method_name:
+            return None
+        class_id = self.known_classes.get(receiver)
         if not class_id:
             return None
         return self.known_methods.get((class_id, method_name))
