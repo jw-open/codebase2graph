@@ -104,7 +104,11 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 base = call.split(".", 1)[0]
                 if base in JS_KEYWORDS or call == name:
                     continue
-                target_id = local_functions.get(call) or imported_functions.get(call)
+                target_id = (
+                    local_functions.get(call)
+                    or _local_javascript_member_call_target(call, local_functions)
+                    or imported_functions.get(call)
+                )
                 if not target_id:
                     target_id = f"js:call:{call}"
                     graph.add_node(target_id, call, attributes={"kind": "call_target", "language": _language(path)})
@@ -119,6 +123,13 @@ def _local_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> di
         if name and name not in JS_KEYWORDS:
             counts[name] = counts.get(name, 0) + 1
     return {name: f"js:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _local_javascript_member_call_target(call: str, local_functions: dict[str, str]) -> str | None:
+    receiver, _, member = call.partition(".")
+    if receiver != "this" or not member or "." in member:
+        return None
+    return local_functions.get(member)
 
 
 def _default_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:

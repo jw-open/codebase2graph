@@ -178,6 +178,32 @@ function main() {
     assert not any(node["id"] in {"js:call:directAlias", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_typescript_this_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+class Service {
+  helper() {
+    return 1;
+  }
+
+  main() {
+    return this.helper();
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:this.helper" for node in graph["nodes"])
+
+
 def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
