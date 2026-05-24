@@ -229,6 +229,47 @@ def main():
     assert not any(node["id"] == "py:call:helpers.qualified" for node in graph["nodes"])
 
 
+def test_python_star_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def direct():
+    return 1
+
+class Service:
+    def helper(self):
+        return direct()
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import *
+
+def main():
+    worker = Service()
+    direct()
+    worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:helpers.py:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:method:helpers.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:Service", "py:call:direct", "py:call:worker.helper"} for node in graph["nodes"])
+
+
 def test_python_function_local_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """

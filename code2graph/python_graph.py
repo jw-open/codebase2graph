@@ -292,6 +292,7 @@ def _imported_function_ids_from_body(
                 continue
             for alias in node.names:
                 if alias.name == "*":
+                    _add_star_function_aliases(imported, function_index, module)
                     continue
                 local_name = alias.asname or alias.name
                 function_id = function_index.get((module, alias.name))
@@ -328,6 +329,7 @@ def _imported_class_ids_from_body(
                 continue
             for alias in node.names:
                 if alias.name == "*":
+                    _add_star_class_aliases(imported, class_index, module)
                     continue
                 local_name = alias.asname or alias.name
                 class_id = class_index.get((module, alias.name))
@@ -349,6 +351,16 @@ def _add_module_function_aliases(
             imported[f"{local_name}.{function_name}"] = function_id
 
 
+def _add_star_function_aliases(
+    imported: dict[str, str],
+    function_index: dict[tuple[str, str], str],
+    module: str,
+) -> None:
+    for (indexed_module, function_name), function_id in function_index.items():
+        if indexed_module == module:
+            imported[function_name] = function_id
+
+
 def _add_module_class_aliases(
     imported: dict[str, str],
     class_index: dict[tuple[str, str], str],
@@ -359,6 +371,16 @@ def _add_module_class_aliases(
     for (indexed_module, class_name), class_id in class_index.items():
         if indexed_module == module or indexed_module.startswith(prefix):
             imported[f"{local_name}.{class_name}"] = class_id
+
+
+def _add_star_class_aliases(
+    imported: dict[str, str],
+    class_index: dict[tuple[str, str], str],
+    module: str,
+) -> None:
+    for (indexed_module, class_name), class_id in class_index.items():
+        if indexed_module == module:
+            imported[class_name] = class_id
 
 
 def _local_function_ids(root: Path, path: Path, tree: ast.Module) -> dict[str, str]:
