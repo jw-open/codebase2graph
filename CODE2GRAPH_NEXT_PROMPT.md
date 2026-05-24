@@ -6,8 +6,8 @@ You are working only in the `code2graph` repository. Continue improving the code
 
 - Target repo: `/home/jwang/github/ohwise/claude-code-source-code`
 - Graph type: `all`
-- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T123321Z.json`
-- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T121315Z.json`
+- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T125320Z.json`
+- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T123321Z.json`
 
 ## Graph Delta
 
@@ -46,7 +46,7 @@ You are working only in the `code2graph` repository. Continue improving the code
 
 ```text
 ........                                                                 [100%]
-8 passed in 0.03s
+8 passed in 0.04s
 ```
 
 ## Recommended Next Steps
