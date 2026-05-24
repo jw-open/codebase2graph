@@ -34,6 +34,7 @@ class PythonCollector(ast.NodeVisitor):
         self.class_index = class_index
         self.current_module = _module_name(root, path)
         self.scope: list[str] = []
+        self.lexical_function_scopes: list[dict[str, str]] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         class_id = self._entity_id("class", node.name)
@@ -97,10 +98,12 @@ class PythonCollector(ast.NodeVisitor):
         known_classes = {**self.imported_classes, **self.local_classes, **scoped_imported_classes}
         class_aliases = _function_class_aliases(node, known_classes)
         nested_functions = self._nested_function_ids(node)
+        enclosing_functions = _merge_scopes(self.lexical_function_scopes)
         known_functions = {
             **self.imported_functions,
             **self.local_functions,
             **scoped_imported_functions,
+            **enclosing_functions,
             **nested_functions,
         }
         function_aliases, shadowed_functions = _function_aliases(node, known_functions)
@@ -122,6 +125,8 @@ class PythonCollector(ast.NodeVisitor):
                     else:
                         target_id = (
                             scoped_imported_functions.get(call_name)
+                            or nested_functions.get(call_name)
+                            or enclosing_functions.get(call_name)
                             or self.local_functions.get(call_name)
                             or self.imported_functions.get(call_name)
                         )
@@ -133,7 +138,9 @@ class PythonCollector(ast.NodeVisitor):
                         attributes={"kind": "call_target", "language": "python"},
                     )
                 self.graph.add_edge(func_id, target_id, "calls")
+        self.lexical_function_scopes.append(nested_functions)
         self.generic_visit(node)
+        self.lexical_function_scopes.pop()
         self.scope.pop()
 
     def _nested_function_ids(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
@@ -423,6 +430,13 @@ def _function_aliases(
             if function_id:
                 aliases[name] = function_id
     return aliases, set(visitor.assignments)
+
+
+def _merge_scopes(scopes: list[dict[str, str]]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for scope in scopes:
+        merged.update(scope)
+    return merged
 
 
 class _ClassAliasVisitor(ast.NodeVisitor):

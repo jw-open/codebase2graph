@@ -680,6 +680,31 @@ def outer():
     assert not any(node["id"] == "py:call:inner" for node in graph["nodes"])
 
 
+def test_python_nested_sibling_function_calls_resolve_in_enclosing_scope(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+def outer():
+    def first():
+        return second()
+
+    def second():
+        return 1
+
+    return first()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:outer.first"
+        and edge["to"] == "py:function:app.py:outer.second"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:second" for node in graph["nodes"])
+
+
 def test_python_entity_imports_resolve_to_local_files(tmp_path: Path) -> None:
     package = tmp_path / "pkg"
     package.mkdir()
