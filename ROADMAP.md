@@ -32,3 +32,10 @@ Status: implemented.
 - Produce diff reports between graph generations.
 - Keep generated graph snapshots outside git by default.
 
+Status: partially implemented.
+
+- `code2graph-iterate` / `python -m code2graph.iterate` can run once, N times, or forever.
+- It writes tracked progress to `CODE2GRAPH_PROGRESS.md`.
+- It keeps large graph snapshots in ignored `.code2graph-runs/`.
+- It can commit and push progress using the `jw-open` identity when `--commit-push` is set.
+- It can call a local report command for Discord/webhook integration.

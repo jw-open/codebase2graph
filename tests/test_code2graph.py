@@ -5,6 +5,7 @@ from pathlib import Path
 
 from code2graph.builder import build_graph
 from code2graph.cli import main
+from code2graph.iterate import main as iterate_main
 
 
 def test_folder_graph_shape(tmp_path: Path) -> None:
@@ -89,3 +90,30 @@ def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
     data = json.loads(output.read_text(encoding="utf-8"))
     assert set(data) == {"nodes", "edges", "current_node_id"}
     assert any(node["id"] == "workflow:npm:build" for node in data["nodes"])
+
+
+def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+    output_dir = tmp_path / "runs"
+    report_file = tmp_path / "progress.md"
+
+    monkeypatch.chdir(tmp_path)
+    code = iterate_main(
+        [
+            str(repo),
+            "--graph",
+            "all",
+            "--iterations",
+            "1",
+            "--output-dir",
+            str(output_dir),
+            "--report-file",
+            str(report_file),
+        ]
+    )
+
+    assert code == 0
+    assert "generated" in report_file.read_text(encoding="utf-8")
+    assert list(output_dir.glob("repo.all.*.json"))

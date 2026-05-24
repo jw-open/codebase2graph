@@ -20,7 +20,7 @@ classifiers = [
 
 [project.scripts]
 code2graph = "code2graph.cli:main"
+code2graph-iterate = "code2graph.iterate:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
