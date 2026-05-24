@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# code2graph generated outputs
+examples/*.graph.json
+out/

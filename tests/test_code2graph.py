@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from code2graph.builder import build_graph
+from code2graph.cli import main
+
+
+def test_folder_graph_shape(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+    graph = build_graph(tmp_path, "folder").to_dict()
+
+    assert graph["current_node_id"] == "repo"
+    assert any(node["id"] == "folder:src" for node in graph["nodes"])
+    assert any(edge["from"] == "folder:src" and edge["to"] == "file:src/app.py" for edge in graph["edges"])
+
+
+def test_python_call_graph(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text(
+        """
+def helper():
+    return 1
+
+def main():
+    helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    labels = {node["label"] for node in graph["nodes"]}
+    assert {"helper", "main"}.issubset(labels)
+    assert any(edge["label"] == "calls" and edge["to"] == "py:call:helper" for edge in graph["edges"])
+
+
+def test_typescript_call_graph(tmp_path: Path) -> None:
+    source = tmp_path / "app.ts"
+    source.write_text(
+        """
+export function helper() {
+  return 1;
+}
+
+export const main = () => {
+  helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:app.ts:main" for node in graph["nodes"])
+    assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:helper" for edge in graph["edges"])
+
+
+def test_schema_graph_from_sql(tmp_path: Path) -> None:
+    (tmp_path / "schema.sql").write_text(
+        """
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL
+);
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "schema").to_dict()
+
+    assert any(node["id"] == "db:table:users" for node in graph["nodes"])
+    assert any(node["id"] == "db:column:users.email" for node in graph["nodes"])
+
+
+def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"build": "tsc --noEmit"}}),
+        encoding="utf-8",
+    )
+    output = tmp_path / "graph.json"
+
+    code = main([str(tmp_path), "--graph", "workflow", "--output", str(output)])
+
+    assert code == 0
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert set(data) == {"nodes", "edges", "current_node_id"}
+    assert any(node["id"] == "workflow:npm:build" for node in data["nodes"])
