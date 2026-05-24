@@ -18,6 +18,8 @@ class PythonCollector(ast.NodeVisitor):
         known_methods: dict[tuple[str, str], str],
         imported_functions: dict[str, str],
         imported_classes: dict[str, str],
+        function_index: dict[tuple[str, str], str],
+        class_index: dict[tuple[str, str], str],
     ) -> None:
         self.root = root
         self.path = path
@@ -25,9 +27,12 @@ class PythonCollector(ast.NodeVisitor):
         self.file_id = rel_id("file", root, path)
         self.local_functions = local_functions
         self.local_classes = local_classes
-        self.known_classes = {**imported_classes, **local_classes}
         self.known_methods = known_methods
         self.imported_functions = imported_functions
+        self.imported_classes = imported_classes
+        self.function_index = function_index
+        self.class_index = class_index
+        self.current_module = _module_name(root, path)
         self.scope: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -79,9 +84,25 @@ class PythonCollector(ast.NodeVisitor):
         )
         self.graph.add_edge(self.scope[-1] if self.scope else self.file_id, func_id, "defines")
         enclosing_class_id = self.scope[-1] if kind == "method" else None
-        class_aliases = _function_class_aliases(node, self.known_classes)
+        scoped_imported_functions = _imported_function_ids_from_body(
+            node.body,
+            self.current_module,
+            self.function_index,
+        )
+        scoped_imported_classes = _imported_class_ids_from_body(
+            node.body,
+            self.current_module,
+            self.class_index,
+        )
+        known_classes = {**self.imported_classes, **self.local_classes, **scoped_imported_classes}
+        class_aliases = _function_class_aliases(node, known_classes)
         nested_functions = self._nested_function_ids(node)
-        known_functions = {**self.imported_functions, **self.local_functions, **nested_functions}
+        known_functions = {
+            **self.imported_functions,
+            **self.local_functions,
+            **scoped_imported_functions,
+            **nested_functions,
+        }
         function_aliases, shadowed_functions = _function_aliases(node, known_functions)
         self.scope.append(func_id)
         for child in _scope_calls(node):
@@ -90,8 +111,8 @@ class PythonCollector(ast.NodeVisitor):
                 target_id = (
                     self._method_call_target(call_name, enclosing_class_id)
                     or self._instance_method_call_target(call_name, class_aliases)
-                    or self._class_method_call_target(call_name)
-                    or self._class_call_target(call_name)
+                    or self._class_method_call_target(call_name, known_classes)
+                    or self._class_call_target(call_name, known_classes)
                 )
                 if not target_id:
                     if call_name in nested_functions:
@@ -99,7 +120,11 @@ class PythonCollector(ast.NodeVisitor):
                     elif call_name in shadowed_functions:
                         target_id = function_aliases.get(call_name)
                     else:
-                        target_id = self.local_functions.get(call_name) or self.imported_functions.get(call_name)
+                        target_id = (
+                            scoped_imported_functions.get(call_name)
+                            or self.local_functions.get(call_name)
+                            or self.imported_functions.get(call_name)
+                        )
                 if not target_id:
                     target_id = f"py:call:{call_name}"
                     self.graph.add_node(
@@ -143,17 +168,17 @@ class PythonCollector(ast.NodeVisitor):
             return None
         return self.known_methods.get((class_id, method_name))
 
-    def _class_method_call_target(self, call_name: str) -> str | None:
+    def _class_method_call_target(self, call_name: str, known_classes: dict[str, str]) -> str | None:
         receiver, _, method_name = call_name.rpartition(".")
         if not receiver or not method_name:
             return None
-        class_id = self.known_classes.get(receiver)
+        class_id = known_classes.get(receiver)
         if not class_id:
             return None
         return self.known_methods.get((class_id, method_name))
 
-    def _class_call_target(self, call_name: str) -> str | None:
-        return self.known_classes.get(call_name)
+    def _class_call_target(self, call_name: str, known_classes: dict[str, str]) -> str | None:
+        return known_classes.get(call_name)
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
@@ -202,6 +227,8 @@ def build_python_graph(root: Path) -> Graph:
             method_index,
             _imported_function_ids(root, path, tree, function_index),
             _imported_class_ids(root, path, tree, class_index),
+            function_index,
+            class_index,
         ).visit(tree)
     return graph
 
@@ -237,9 +264,16 @@ def _imported_function_ids(
     tree: ast.Module,
     function_index: dict[tuple[str, str], str],
 ) -> dict[str, str]:
+    return _imported_function_ids_from_body(tree.body, _module_name(root, path), function_index)
+
+
+def _imported_function_ids_from_body(
+    body: list[ast.stmt],
+    current_module: str,
+    function_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
     imported: dict[str, str] = {}
-    current_module = _module_name(root, path)
-    for node in tree.body:
+    for node in body:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 module = alias.name
@@ -266,9 +300,16 @@ def _imported_class_ids(
     tree: ast.Module,
     class_index: dict[tuple[str, str], str],
 ) -> dict[str, str]:
+    return _imported_class_ids_from_body(tree.body, _module_name(root, path), class_index)
+
+
+def _imported_class_ids_from_body(
+    body: list[ast.stmt],
+    current_module: str,
+    class_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
     imported: dict[str, str] = {}
-    current_module = _module_name(root, path)
-    for node in tree.body:
+    for node in body:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 module = alias.name

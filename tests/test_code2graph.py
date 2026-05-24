@@ -229,6 +229,41 @@ def main():
     assert not any(node["id"] == "py:call:helpers.qualified" for node in graph["nodes"])
 
 
+def test_python_function_local_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def direct():
+    return 1
+
+def qualified():
+    return 2
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+def main():
+    import helpers as tools
+    from helpers import direct as renamed
+    renamed()
+    tools.qualified()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:renamed", "py:call:tools.qualified"} for node in graph["nodes"])
+
+
 def test_python_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """
@@ -401,6 +436,45 @@ def direct():
     return worker.helper()
 
 def qualified():
+    worker = service.Service()
+    return worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:direct"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:qualified"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
+
+
+def test_python_function_local_imported_class_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+def direct():
+    from service import Service
+    worker = Service()
+    return worker.helper()
+
+def qualified():
+    import service
     worker = service.Service()
     return worker.helper()
 """,
