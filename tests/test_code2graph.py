@@ -387,6 +387,46 @@ def qualified():
     assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
 
 
+def test_python_constructor_calls_resolve_to_classes(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    pass
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import service
+from service import Service
+
+class Local:
+    pass
+
+def main():
+    Local()
+    Service()
+    service.Service()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:app.py:Local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:service.py:Service"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"py:call:Local", "py:call:Service", "py:call:service.Service"}
+        for node in graph["nodes"]
+    )
+
+
 def test_python_class_qualified_method_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """

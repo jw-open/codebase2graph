@@ -91,6 +91,7 @@ class PythonCollector(ast.NodeVisitor):
                     self._method_call_target(call_name, enclosing_class_id)
                     or self._instance_method_call_target(call_name, class_aliases)
                     or self._class_method_call_target(call_name)
+                    or self._class_call_target(call_name)
                 )
                 if not target_id:
                     if call_name in nested_functions:
@@ -150,6 +151,9 @@ class PythonCollector(ast.NodeVisitor):
         if not class_id:
             return None
         return self.known_methods.get((class_id, method_name))
+
+    def _class_call_target(self, call_name: str) -> str | None:
+        return self.known_classes.get(call_name)
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
