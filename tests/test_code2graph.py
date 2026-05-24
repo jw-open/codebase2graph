@@ -1211,6 +1211,64 @@ def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
     assert any(node["id"] == "workflow:npm:build" for node in data["nodes"])
 
 
+def test_cli_updates_existing_graph_and_removes_stale_nodes(tmp_path: Path) -> None:
+    (tmp_path / "old.py").write_text("def old():\n    return 1\n", encoding="utf-8")
+    graph_path = tmp_path / "graph.json"
+
+    assert main([str(tmp_path), "--graph", "folder", "--output", str(graph_path)]) == 0
+    initial = json.loads(graph_path.read_text(encoding="utf-8"))
+    for node in initial["nodes"]:
+        if node["id"] == "file:old.py":
+            node["attributes"]["owner_note"] = "keep this if file survives"
+    graph_path.write_text(json.dumps(initial), encoding="utf-8")
+
+    (tmp_path / "old.py").unlink()
+    (tmp_path / "new.py").write_text("def new():\n    return 2\n", encoding="utf-8")
+    summary_path = tmp_path / "update-summary.json"
+
+    code = main(
+        [
+            str(tmp_path),
+            "--graph",
+            "folder",
+            "--update-existing",
+            str(graph_path),
+            "--update-summary-output",
+            str(summary_path),
+        ]
+    )
+
+    assert code == 0
+    updated = json.loads(graph_path.read_text(encoding="utf-8"))
+    node_ids = {node["id"] for node in updated["nodes"]}
+    assert "file:new.py" in node_ids
+    assert "file:old.py" not in node_ids
+    assert all(edge["from"] in node_ids and edge["to"] in node_ids for edge in updated["edges"])
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["added_nodes"] >= 1
+    assert summary["removed_nodes"] >= 1
+
+
+def test_cli_update_preserves_existing_custom_node_attributes(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    graph_path = tmp_path / "graph.json"
+
+    assert main([str(tmp_path), "--graph", "folder", "--output", str(graph_path)]) == 0
+    existing = json.loads(graph_path.read_text(encoding="utf-8"))
+    for node in existing["nodes"]:
+        if node["id"] == "file:app.py":
+            node["attributes"]["review_status"] = "approved"
+    graph_path.write_text(json.dumps(existing), encoding="utf-8")
+
+    assert main([str(tmp_path), "--graph", "folder", "--update-existing", str(graph_path)]) == 0
+
+    updated = json.loads(graph_path.read_text(encoding="utf-8"))
+    app_node = next(node for node in updated["nodes"] if node["id"] == "file:app.py")
+    assert app_node["attributes"]["kind"] == "file"
+    assert app_node["attributes"]["review_status"] == "approved"
+
+
 def test_graph_summary_reports_entrypoints_hotspots_and_isolated_modules(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text(
         json.dumps({"scripts": {"start": "python app.py"}}),

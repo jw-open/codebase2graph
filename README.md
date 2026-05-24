@@ -45,6 +45,17 @@ python -m code2graph /path/to/repo \
 
 The summary includes entrypoints, high-fan-in nodes, high-fan-out nodes, and files that only have structural folder links.
 
+Update an existing OhWise graph in place:
+
+```bash
+python -m code2graph /path/to/repo \
+  --graph all \
+  --update-existing out/code-graph.json \
+  --update-summary-output out/code-graph.update.json
+```
+
+Update mode rebuilds the selected graph from the current repository state, keeps stable node/edge IDs, removes stale nodes and edges for deleted or changed code, and preserves custom node attributes that were added outside `code2graph`.
+
 Generate one graph type:
 
 ```bash
