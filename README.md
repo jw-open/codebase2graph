@@ -42,6 +42,7 @@ python -m code2graph /path/to/repo --graph call
 python -m code2graph /path/to/repo --graph entity
 python -m code2graph /path/to/repo --graph schema
 python -m code2graph /path/to/repo --graph workflow
+python -m code2graph /path/to/repo --graph infra
 ```
 
 Graph types:
@@ -51,7 +52,16 @@ Graph types:
 - `entity`: source entities and import relationships.
 - `schema`: database/schema hints from SQL, Prisma, Django, SQLAlchemy, and common migration files.
 - `workflow`: likely runnable workflows from package scripts, Makefile targets, CI jobs, Docker Compose services, and Python entrypoints.
+- `infra`: service topology, CI/CD pipelines, service-level communication, cloud providers/resources, integrations, and package/runtime dependencies.
 - `all`: merged multi-layer graph.
+
+The infra graph currently extracts:
+
+- Services from Docker Compose, Kubernetes manifests, Dockerfiles, and Serverless files.
+- Service communication from Compose `depends_on`, exposed ports, URL-like environment values, and integration endpoint references.
+- CI/CD pipelines and jobs from GitHub Actions workflow files.
+- Cloud providers/resources from Terraform provider/resource declarations and Serverless provider config.
+- Dependencies from `package.json`, `requirements.txt`, and `pyproject.toml`.
 
 ## Sample
 

@@ -220,6 +220,54 @@ def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
     assert any(node["id"] == "workflow:npm:build" for node in data["nodes"])
 
 
+def test_infra_graph_from_compose_ci_and_cloud_files(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        """
+services:
+  api:
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      STRIPE_API_URL: https://api.stripe.com
+  db:
+    image: postgres:16
+""",
+        encoding="utf-8",
+    )
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "deploy.yml").write_text(
+        """
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  deploy:
+    runs-on: ubuntu-latest
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.tf").write_text(
+        """
+provider "aws" {}
+resource "aws_lambda_function" "worker" {}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"next": "latest"}}), encoding="utf-8")
+
+    graph = build_graph(tmp_path, "infra").to_dict()
+
+    assert any(node["id"] == "infra:service:api" for node in graph["nodes"])
+    assert any(edge["from"] == "infra:service:api" and edge["to"] == "infra:service:db" and edge["label"] == "depends_on" for edge in graph["edges"])
+    assert any(edge["from"] == "infra:service:api" and edge["to"] == "infra:integration:api.stripe.com" for edge in graph["edges"])
+    assert any(node["id"] == "infra:pipeline:.github/workflows/deploy.yml" for node in graph["nodes"])
+    assert any(node["id"] == "infra:ci_job:.github/workflows/deploy.yml:deploy" for node in graph["nodes"])
+    assert any(node["id"] == "infra:cloud:aws" for node in graph["nodes"])
+    assert any(node["id"] == "infra:dependency:npm:next" for node in graph["nodes"])
+
+
 def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
