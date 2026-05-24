@@ -6,8 +6,8 @@ You are working only in the `code2graph` repository. Continue improving the code
 
 - Target repo: `/home/jwang/github/ohwise/claude-code-source-code`
 - Graph type: `all`
-- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T133332Z.json`
-- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T131326Z.json`
+- Current snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T135338Z.json`
+- Previous snapshot: `.code2graph-runs/claude-code-source-code.all.20260524T133332Z.json`
 
 ## Graph Delta
 
