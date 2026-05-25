@@ -1329,6 +1329,60 @@ func main() {
     assert not any(node["id"] in {"go:call:local", "go:call:pkg.Helper"} for node in graph["nodes"])
 
 
+def test_go_call_graph_uses_declared_package_name_for_unaliased_imports(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    service_dir = tmp_path / "internal" / "service"
+    service_dir.mkdir(parents=True)
+    (service_dir / "service.go").write_text(
+        """
+package svc
+
+type Service struct{}
+
+func New() Service {
+    return Service{}
+}
+
+func Helper() int {
+    return 1
+}
+
+func (s Service) Run() int {
+    return 2
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.go").write_text(
+        """
+package main
+
+import "example.com/app/internal/service"
+
+func main() {
+    worker := svc.New()
+    svc.Helper()
+    worker.Run()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "go:function:main.go:main"
+        and edge["to"] == "go:function:internal/service/service.go:Helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "go:function:main.go:main"
+        and edge["to"] == "go:method:internal/service/service.go:Service.Run"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"go:call:svc.Helper", "go:call:worker.Run"} for node in graph["nodes"])
+
+
 def test_go_call_graph_resolves_receiver_and_instance_methods(tmp_path: Path) -> None:
     (tmp_path / "service.go").write_text(
         """

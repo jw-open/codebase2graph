@@ -1275,6 +1275,7 @@ GO_FUNC_RE = re.compile(
     re.M,
 )
 GO_CALL_RE = re.compile(r"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\(")
+GO_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<name>[A-Za-z_]\w*)", re.M)
 GO_IMPORT_RE = re.compile(
     r"^\s*import\s+(?:"
     r"(?P<single_alias>\.|_|[A-Za-z_]\w*)?\s*\"(?P<single>[^\"]+)\""
@@ -1326,6 +1327,7 @@ def _build_go_call_graph(root: Path) -> Graph:
     package_function_returns: dict[tuple[str, str], set[tuple[str, str]]] = {}
     package_methods: dict[tuple[str, str, str], set[str]] = {}
     package_paths: dict[str, str] = {}
+    package_names: dict[str, str] = {}
     module_name = _go_module_name(root)
 
     for path in iter_files(root):
@@ -1335,6 +1337,7 @@ def _build_go_call_graph(root: Path) -> Graph:
         text = read_text(path)
         package_key = _go_package_key(root, path)
         package_paths[_go_package_import_path(root, path, module_name)] = package_key
+        package_names.setdefault(package_key, _go_package_name(text) or path.parent.name)
         matches = list(GO_FUNC_RE.finditer(text))
         files.append((path, rel, text, matches, package_key))
         for match in matches:
@@ -1348,7 +1351,7 @@ def _build_go_call_graph(root: Path) -> Graph:
                 package_functions.setdefault((package_key, name), set()).add(f"go:function:{rel}:{name}")
 
     for _path, _rel, text, matches, package_key in files:
-        known_types = _go_known_type_refs(text, package_methods, package_paths, module_name, package_key)
+        known_types = _go_known_type_refs(text, package_methods, package_paths, package_names, module_name, package_key)
         for match in matches:
             if match.group("receiver"):
                 continue
@@ -1360,13 +1363,14 @@ def _build_go_call_graph(root: Path) -> Graph:
         file_id = rel_id("file", root, path)
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": "go", "path": rel})
         local_functions = _go_local_functions(package_functions, package_key)
-        imported_functions = _go_imported_functions(text, package_functions, package_paths, module_name)
-        known_types = _go_known_type_refs(text, package_methods, package_paths, module_name, package_key)
+        imported_functions = _go_imported_functions(text, package_functions, package_paths, package_names, module_name)
+        known_types = _go_known_type_refs(text, package_methods, package_paths, package_names, module_name, package_key)
         constructor_returns = _go_constructor_returns(
             text,
             package_functions,
             package_function_returns,
             package_paths,
+            package_names,
             module_name,
             package_key,
         )
@@ -1437,6 +1441,17 @@ def _go_package_import_path(root: Path, path: Path, module_name: str) -> str:
     return package_key
 
 
+def _go_package_name(text: str) -> str | None:
+    match = GO_PACKAGE_RE.search(text)
+    return match.group("name") if match else None
+
+
+def _go_import_alias(alias: str | None, import_path: str, package_key: str, package_names: dict[str, str]) -> str:
+    if alias and alias not in {".", "_"}:
+        return alias
+    return package_names.get(package_key) or import_path.rsplit("/", 1)[-1]
+
+
 def _go_receiver_type(receiver: str | None) -> str | None:
     if not receiver:
         return None
@@ -1467,6 +1482,7 @@ def _go_imported_functions(
     text: str,
     package_functions: dict[tuple[str, str], set[str]],
     package_paths: dict[str, str],
+    package_names: dict[str, str],
     module_name: str,
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
@@ -1476,7 +1492,7 @@ def _go_imported_functions(
             package_key = import_path.removeprefix(f"{module_name}/")
         if package_key is None:
             continue
-        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        package_alias = _go_import_alias(alias, import_path, package_key, package_names)
         for (indexed_package, name), function_ids in package_functions.items():
             if indexed_package == package_key and len(function_ids) == 1:
                 function_id = next(iter(function_ids))
@@ -1511,6 +1527,7 @@ def _go_known_type_refs(
     text: str,
     package_methods: dict[tuple[str, str, str], set[str]],
     package_paths: dict[str, str],
+    package_names: dict[str, str],
     module_name: str,
     package_key: str,
 ) -> dict[str, tuple[str, str]]:
@@ -1521,7 +1538,7 @@ def _go_known_type_refs(
             imported_package_key = import_path.removeprefix(f"{module_name}/")
         if imported_package_key is None:
             continue
-        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        package_alias = _go_import_alias(alias, import_path, imported_package_key, package_names)
         for indexed_package, type_name, _method in package_methods:
             if indexed_package == imported_package_key:
                 known_types[f"{package_alias}.{type_name}"] = (indexed_package, type_name)
@@ -1535,6 +1552,7 @@ def _go_constructor_returns(
     package_functions: dict[tuple[str, str], set[str]],
     package_function_returns: dict[tuple[str, str], set[tuple[str, str]]],
     package_paths: dict[str, str],
+    package_names: dict[str, str],
     module_name: str,
     package_key: str,
 ) -> dict[str, tuple[str, str]]:
@@ -1550,7 +1568,7 @@ def _go_constructor_returns(
             imported_package_key = import_path.removeprefix(f"{module_name}/")
         if imported_package_key is None:
             continue
-        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        package_alias = _go_import_alias(alias, import_path, imported_package_key, package_names)
         for (indexed_package, function_name), return_types in package_function_returns.items():
             function_ids = package_functions.get((indexed_package, function_name), set())
             if indexed_package != imported_package_key or len(function_ids) != 1 or len(return_types) != 1:
