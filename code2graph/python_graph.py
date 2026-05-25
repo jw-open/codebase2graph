@@ -1082,7 +1082,12 @@ class _FunctionAliasVisitor(ast.NodeVisitor):
 
     def _reference_target(self, node: ast.AST) -> str | None:
         call_name = _call_name(node)
-        if not call_name or call_name in self.assignments:
+        if not call_name:
+            return None
+        if call_name in self.assignments:
+            assigned_ids = self.assignments[call_name]
+            if len(assigned_ids) == 1:
+                return next(iter(assigned_ids))
             return None
         return self.known_functions.get(call_name)
 
@@ -1094,7 +1099,12 @@ class _ClassAliasReferenceVisitor(_FunctionAliasVisitor):
 
     def _reference_target(self, node: ast.AST) -> str | None:
         call_name = _call_name(node)
-        if not call_name or call_name in self.assignments:
+        if not call_name:
+            return None
+        if call_name in self.assignments:
+            assigned_ids = self.assignments[call_name]
+            if len(assigned_ids) == 1:
+                return next(iter(assigned_ids))
             return None
         return self.known_classes.get(call_name)
 

@@ -2354,6 +2354,78 @@ def main():
     assert not any(node["id"] in {"py:call:local_alias", "py:call:imported_alias"} for node in graph["nodes"])
 
 
+def test_python_chained_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def imported():
+    return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import imported
+
+def local():
+    return 2
+
+module_primary = imported
+module_secondary = module_primary
+
+def main():
+    local_primary = local
+    local_secondary = local_primary
+    local_secondary()
+    module_secondary()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:app.py:local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:imported"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:local_secondary", "py:call:module_secondary"} for node in graph["nodes"])
+
+
+def test_python_ambiguous_chained_function_alias_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+def first():
+    return 1
+
+def second():
+    return 2
+
+def main(flag):
+    primary = first
+    if flag:
+        primary = second
+    secondary = primary
+    secondary()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:secondary"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] in {"py:function:app.py:first", "py:function:app.py:second"}
+        for edge in graph["edges"]
+    )
+
+
 def test_python_local_functions_shadow_imported_function_aliases(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """
