@@ -22,6 +22,7 @@ class PythonCollector(ast.NodeVisitor):
         module_function_aliases: dict[str, str],
         module_class_aliases: dict[str, str],
         module_instance_aliases: dict[str, str],
+        module_partial_names: set[str],
         class_instance_aliases: dict[str, dict[str, str]],
         function_return_classes: dict[str, str],
         function_index: dict[tuple[str, str], str],
@@ -40,6 +41,7 @@ class PythonCollector(ast.NodeVisitor):
         self.module_function_aliases = module_function_aliases
         self.module_class_aliases = module_class_aliases
         self.module_instance_aliases = module_instance_aliases
+        self.module_partial_names = module_partial_names
         self.class_instance_aliases = class_instance_aliases
         self.function_return_classes = function_return_classes
         self.function_index = function_index
@@ -138,7 +140,11 @@ class PythonCollector(ast.NodeVisitor):
             **self._method_reference_targets(known_classes),
             **self._method_reference_targets(("self", "cls"), enclosing_class_id),
         }
-        function_aliases, shadowed_functions = _function_aliases(node, known_callables)
+        function_aliases, shadowed_functions = _function_aliases(
+            node,
+            known_callables,
+            partial_names=self.module_partial_names | _functools_partial_names(node.body),
+        )
         self.scope.append(func_id)
         for child in _scope_calls(node):
             call_name = _call_name(child.func)
@@ -306,6 +312,7 @@ def build_python_graph(root: Path) -> Graph:
             tree.body,
             {**imported_functions, **local_functions},
             reserved=set(local_functions),
+            partial_names=_functools_partial_names(tree.body),
         )
         module_class_aliases = _module_class_aliases(
             tree.body,
@@ -334,6 +341,7 @@ def build_python_graph(root: Path) -> Graph:
             module_function_aliases,
             module_class_aliases,
             module_instance_aliases,
+            _functools_partial_names(tree.body),
             class_instance_aliases,
             function_return_classes,
             function_index,
@@ -763,6 +771,22 @@ def _scope_import_nodes(body: list[ast.stmt]) -> list[ast.Import | ast.ImportFro
     return visitor.imports
 
 
+def _functools_partial_names(body: list[ast.stmt]) -> set[str]:
+    names: set[str] = set()
+    for node in _scope_import_nodes(body):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "functools":
+                    names.add(f"{alias.asname or alias.name}.partial")
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "functools":
+            for alias in node.names:
+                if alias.name == "partial":
+                    names.add(alias.asname or alias.name)
+                elif alias.name == "*":
+                    names.add("partial")
+    return names
+
+
 def _add_module_function_aliases(
     imported: dict[str, str],
     function_index: dict[tuple[str, str], str],
@@ -888,8 +912,10 @@ def _class_instance_aliases(
 def _function_aliases(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     known_functions: dict[str, str],
+    *,
+    partial_names: set[str] | None = None,
 ) -> tuple[dict[str, str], set[str]]:
-    visitor = _FunctionAliasVisitor(known_functions)
+    visitor = _FunctionAliasVisitor(known_functions, partial_names or set())
     for name in _argument_names(node.args):
         visitor.assignments.setdefault(name, set()).add(None)
     for child in node.body:
@@ -909,8 +935,9 @@ def _module_function_aliases(
     known_functions: dict[str, str],
     *,
     reserved: set[str],
+    partial_names: set[str] | None = None,
 ) -> dict[str, str]:
-    aliases, shadowed = _aliases_from_body(body, _FunctionAliasVisitor(known_functions))
+    aliases, shadowed = _aliases_from_body(body, _FunctionAliasVisitor(known_functions, partial_names or set()))
     return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
 
 
@@ -1025,8 +1052,9 @@ class _ClassAliasVisitor(ast.NodeVisitor):
 
 
 class _FunctionAliasVisitor(ast.NodeVisitor):
-    def __init__(self, known_functions: dict[str, str]) -> None:
+    def __init__(self, known_functions: dict[str, str], partial_names: set[str] | None = None) -> None:
         self.known_functions = known_functions
+        self.partial_names = partial_names or set()
         self.assignments: dict[str, set[str | None]] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -1081,6 +1109,10 @@ class _FunctionAliasVisitor(ast.NodeVisitor):
             self.assignments.setdefault(name, set()).add(function_id)
 
     def _reference_target(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Call):
+            call_name = _call_name(node.func)
+            if call_name in self.partial_names and node.args:
+                return self._reference_target(node.args[0])
         call_name = _call_name(node)
         if not call_name:
             return None
