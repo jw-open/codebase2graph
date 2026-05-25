@@ -2400,6 +2400,11 @@ def _rust_imported_functions(
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
     for module_path, imported_name, local_name in _rust_use_function_aliases(text):
+        if imported_name == "*":
+            for (indexed_module, function_name), function_ids in module_functions.items():
+                if indexed_module == module_path and len(function_ids) == 1:
+                    imported[function_name] = next(iter(function_ids))
+            continue
         function_id = _unique_rust_module_function(module_functions, module_path, imported_name)
         if function_id:
             imported[local_name] = function_id
@@ -2431,8 +2436,10 @@ def _rust_use_function_aliases(text: str) -> list[tuple[str, str, str]]:
 
 def _parse_rust_use_item(item: str) -> tuple[str, str] | None:
     item = item.strip()
-    if not item or item == "self" or item == "*":
+    if not item or item == "self":
         return None
+    if item == "*":
+        return "*", "*"
     parts = re.split(r"\s+as\s+", item, maxsplit=1)
     imported_name = parts[0].strip()
     local_name = parts[1].strip() if len(parts) == 2 else imported_name

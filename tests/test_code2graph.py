@@ -2026,6 +2026,48 @@ fn main() {
     )
 
 
+def test_rust_call_graph_resolves_local_glob_imports(tmp_path: Path) -> None:
+    (tmp_path / "helpers.rs").write_text(
+        """
+pub fn direct() -> i32 {
+    1
+}
+
+pub fn secondary() -> i32 {
+    direct()
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.rs").write_text(
+        """
+mod helpers;
+
+use helpers::*;
+
+fn main() {
+    direct();
+    secondary();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:helpers.rs:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:helpers.rs:secondary"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"rust:call:direct", "rust:call:secondary"} for node in graph["nodes"])
+
+
 def test_rust_call_graph_resolves_qualified_constructor_instance_methods(tmp_path: Path) -> None:
     (tmp_path / "helpers.rs").write_text(
         """
