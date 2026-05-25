@@ -344,6 +344,107 @@ function main() {
     assert not any(node["id"] in {"js:call:directAlias", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_javascript_commonjs_export_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.js").write_text(
+        """
+function internal() {
+  return 1;
+}
+
+function objectInternal() {
+  return 2;
+}
+
+exports.direct = internal;
+module.exports.objectAlias = objectInternal;
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "object.js").write_text(
+        """
+function objectInternal() {
+  return 1;
+}
+
+module.exports = { objectDirect: objectInternal };
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+const { direct, objectAlias } = require("./helpers");
+const helpers = require("./helpers");
+const { objectDirect } = require("./object");
+
+function main() {
+  direct();
+  objectAlias();
+  objectDirect();
+  helpers.direct();
+  helpers.objectAlias();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:internal"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:objectInternal"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:object.js:objectInternal"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"]
+        in {
+            "js:call:direct",
+            "js:call:objectAlias",
+            "js:call:objectDirect",
+            "js:call:helpers.direct",
+            "js:call:helpers.objectAlias",
+        }
+        for node in graph["nodes"]
+    )
+
+
+def test_javascript_commonjs_default_export_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.js").write_text(
+        """
+function internal() {
+  return 1;
+}
+
+module.exports = internal;
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+const run = require("./helpers");
+
+function main() {
+  run();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:internal"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:run" for node in graph["nodes"])
+
+
 def test_javascript_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.js").write_text(
         """

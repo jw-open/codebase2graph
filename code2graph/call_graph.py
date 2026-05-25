@@ -27,6 +27,16 @@ JS_REEXPORT_RE = re.compile(
     re.M,
 )
 JS_LOCAL_EXPORT_RE = re.compile(r"^\s*export\s+(?P<clause>\{[^}]+\})\s*;?\s*$", re.M)
+JS_COMMONJS_NAMED_EXPORT_RE = re.compile(
+    r"^\s*(?:module\.)?exports\.(?P<exported>[A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?P<local>[A-Za-z_$][\w$]*)\s*;?\s*$",
+    re.M,
+)
+JS_COMMONJS_OBJECT_EXPORT_RE = re.compile(r"^\s*module\.exports\s*=\s*\{(?P<body>.*?)\}\s*;?", re.M | re.S)
+JS_COMMONJS_DEFAULT_EXPORT_RE = re.compile(
+    r"^\s*module\.exports\s*=\s*(?P<local>[A-Za-z_$][\w$]*)\s*;?\s*$",
+    re.M,
+)
 JS_ALIAS_DECL_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
@@ -280,6 +290,7 @@ def _imported_javascript_function_ids(
         if binding.startswith("{"):
             _add_named_javascript_imports(imported, function_index, module_keys, binding)
         else:
+            _add_bound_default_javascript_import(imported, default_function_index, module_keys, binding)
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
 
@@ -331,6 +342,13 @@ def _add_reexported_javascript_function_ids(
                     if function_id not in targets:
                         targets.add(function_id)
                         changed = True
+            commonjs_default_exports = _commonjs_default_exported_javascript_function_ids(root, path, text)
+            for function_id in commonjs_default_exports:
+                for module_key in current_module_keys:
+                    targets = default_function_index.setdefault(module_key, set())
+                    if function_id not in targets:
+                        targets.add(function_id)
+                        changed = True
 
 
 def _local_exported_javascript_functions(
@@ -362,6 +380,43 @@ def _local_exported_javascript_functions(
             target_id = known_functions.get(local_name)
             if target_id:
                 exported[exported_name] = target_id
+    for exported_name, local_name in _commonjs_named_javascript_exports(text).items():
+        target_id = known_functions.get(local_name)
+        if target_id:
+            exported[exported_name] = target_id
+    return exported
+
+
+def _commonjs_named_javascript_exports(text: str) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    for match in JS_COMMONJS_NAMED_EXPORT_RE.finditer(text):
+        exported[match.group("exported")] = match.group("local")
+    for match in JS_COMMONJS_OBJECT_EXPORT_RE.finditer(text):
+        for item in match.group("body").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            parts = re.split(r"\s*:\s*", item, maxsplit=1)
+            exported_name = parts[0].strip()
+            local_name = parts[1].strip() if len(parts) == 2 else exported_name
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", exported_name) and re.fullmatch(r"[A-Za-z_$][\w$]*", local_name):
+                exported[exported_name] = local_name
+    return exported
+
+
+def _commonjs_default_exported_javascript_function_ids(root: Path, path: Path, text: str) -> set[str]:
+    matches = [
+        match
+        for match in JS_FUNC_RE.finditer(text)
+        if (_javascript_function_name(match) not in JS_KEYWORDS)
+    ]
+    local_functions = _local_javascript_function_ids(path.relative_to(root).as_posix(), matches)
+    exported: set[str] = set()
+    for match in JS_COMMONJS_DEFAULT_EXPORT_RE.finditer(text):
+        local_name = match.group("local")
+        target_id = local_functions.get(local_name)
+        if target_id:
+            exported.add(target_id)
     return exported
 
 
@@ -417,6 +472,17 @@ def _add_default_javascript_import(
     target_id = _unique_default_javascript_function(default_function_index, module_keys)
     if target_id:
         imported[default_match.group(1)] = target_id
+
+
+def _add_bound_default_javascript_import(
+    imported: dict[str, str],
+    default_function_index: dict[str, set[str]],
+    module_keys: list[str],
+    local_name: str,
+) -> None:
+    target_id = _unique_default_javascript_function(default_function_index, module_keys)
+    if target_id:
+        imported[local_name] = target_id
 
 
 def _add_named_javascript_imports(
