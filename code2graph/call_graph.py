@@ -2015,7 +2015,9 @@ class RustCallable:
 
 JAVA_TYPE_RE = re.compile(
     r"^\s*(?:(?:public|protected|private|abstract|final|static)\s+)*"
-    r"(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_]\w*)[^{]*\{",
+    r"(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_]\w*)"
+    r"(?:\s*<[^>{}]+>)?"
+    r"(?:\s+extends\s+(?P<base>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?:\s*<[^>{}]+>)?)?[^{]*\{",
     re.M,
 )
 JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
@@ -2076,6 +2078,8 @@ def _build_java_call_graph(root: Path) -> Graph:
             class_methods.setdefault((method.package, method.class_name, method.name), set()).add(method.id)
             class_refs.setdefault((method.package, method.class_name), set()).add((method.package, method.class_name))
 
+    class_bases = _java_class_bases(files, file_packages, class_refs)
+
     for path, text in files.items():
         rel = path.relative_to(root).as_posix()
         file_id = rel_id("file", root, path)
@@ -2105,12 +2109,13 @@ def _build_java_call_graph(root: Path) -> Graph:
             preceding_text = body[max(0, call_match.start() - 8) : call_match.start()]
             if re.search(r"\bnew\s+$", preceding_text) and call in known_classes:
                 continue
-            if (base in JAVA_KEYWORDS and base != "this") or call == method.name:
+            if (base in JAVA_KEYWORDS and base not in {"this", "super"}) or call == method.name:
                 continue
             target_id = _java_method_call_target(
                 call,
                 (method.package, method.class_name),
                 class_methods,
+                class_bases,
                 instance_aliases,
                 known_classes,
                 static_imported_methods,
@@ -2184,6 +2189,26 @@ def _java_known_class_refs(
     return known
 
 
+def _java_class_bases(
+    files: dict[Path, str],
+    file_packages: dict[Path, str],
+    class_refs: dict[tuple[str, str], set[tuple[str, str]]],
+) -> dict[tuple[str, str], list[tuple[str, str]]]:
+    class_bases: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for path, text in files.items():
+        package_name = file_packages[path]
+        known_classes = _java_known_class_refs(text, package_name, class_refs)
+        for match in JAVA_TYPE_RE.finditer(text):
+            base_name = match.group("base")
+            if not base_name:
+                continue
+            class_ref = (package_name, match.group("name"))
+            base_ref = known_classes.get(base_name)
+            if base_ref and base_ref != class_ref:
+                class_bases.setdefault(class_ref, []).append(base_ref)
+    return class_bases
+
+
 def _java_static_imported_methods(
     text: str,
     class_methods: dict[tuple[str, str, str], set[str]],
@@ -2228,21 +2253,59 @@ def _java_method_call_target(
     call: str,
     current_class: tuple[str, str],
     class_methods: dict[tuple[str, str, str], set[str]],
+    class_bases: dict[tuple[str, str], list[tuple[str, str]]],
     instance_aliases: dict[str, tuple[str, str]],
     known_classes: dict[str, tuple[str, str]],
     static_imported_methods: dict[str, str],
 ) -> str | None:
     receiver, separator, method_name = call.partition(".")
     if not separator:
-        method_ids = class_methods.get((*current_class, receiver), set())
-        if len(method_ids) == 1:
-            return next(iter(method_ids))
+        target_id = _java_unique_method_target(current_class, receiver, class_methods, class_bases)
+        if target_id:
+            return target_id
         return static_imported_methods.get(receiver)
     else:
+        if receiver == "super":
+            return _java_unique_base_method_target(current_class, method_name, class_methods, class_bases, set())
         target_class = current_class if receiver == "this" else instance_aliases.get(receiver) or known_classes.get(receiver)
-        method_ids = class_methods.get((*target_class, method_name), set()) if target_class else set()
+        if target_class:
+            return _java_unique_method_target(target_class, method_name, class_methods, class_bases)
+    return None
+
+
+def _java_unique_method_target(
+    class_ref: tuple[str, str],
+    method_name: str,
+    class_methods: dict[tuple[str, str, str], set[str]],
+    class_bases: dict[tuple[str, str], list[tuple[str, str]]],
+) -> str | None:
+    method_ids = class_methods.get((*class_ref, method_name), set())
     if len(method_ids) == 1:
         return next(iter(method_ids))
+    if method_ids:
+        return None
+    return _java_unique_base_method_target(class_ref, method_name, class_methods, class_bases, set())
+
+
+def _java_unique_base_method_target(
+    class_ref: tuple[str, str],
+    method_name: str,
+    class_methods: dict[tuple[str, str, str], set[str]],
+    class_bases: dict[tuple[str, str], list[tuple[str, str]]],
+    visiting: set[tuple[str, str]],
+) -> str | None:
+    if class_ref in visiting:
+        return None
+    visiting.add(class_ref)
+    matches: set[str] = set()
+    for base_ref in class_bases.get(class_ref, []):
+        matches.update(class_methods.get((*base_ref, method_name), set()))
+        inherited_id = _java_unique_base_method_target(base_ref, method_name, class_methods, class_bases, visiting)
+        if inherited_id:
+            matches.add(inherited_id)
+    visiting.remove(class_ref)
+    if len(matches) == 1:
+        return next(iter(matches))
     return None
 
 

@@ -1977,6 +1977,66 @@ class App {
     assert not any(node["id"] in {"java:call:direct", "java:call:wildcard"} for node in graph["nodes"])
 
 
+def test_java_call_graph_resolves_inherited_methods(tmp_path: Path) -> None:
+    package_a = tmp_path / "a"
+    package_a.mkdir()
+    (package_a / "Base.java").write_text(
+        """
+package a;
+
+public class Base {
+    int helper() {
+        return 1;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (package_a / "Child.java").write_text(
+        """
+package a;
+
+public class Child extends Base {
+    int run() {
+        helper();
+        return super.helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+import a.Child;
+
+class App {
+    void main() {
+        Child child = new Child();
+        child.helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "java:method:a/Child.java:Child.run"
+        and edge["to"] == "java:method:a/Base.java:Base.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:a/Base.java:Base.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"java:call:helper", "java:call:super.helper", "java:call:child.helper"}
+        for node in graph["nodes"]
+    )
+
+
 def test_rust_call_graph_resolves_functions_and_impl_methods(tmp_path: Path) -> None:
     (tmp_path / "main.rs").write_text(
         """
