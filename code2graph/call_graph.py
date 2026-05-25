@@ -1028,6 +1028,7 @@ def _go_method_call_target(
 class JavaMethod:
     path: Path
     rel: str
+    package: str
     class_name: str
     name: str
     start: int
@@ -1073,6 +1074,8 @@ JAVA_TYPE_RE = re.compile(
     r"(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_]\w*)[^{]*\{",
     re.M,
 )
+JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
+JAVA_IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
 JAVA_METHOD_RE = re.compile(
     r"^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp|default)\s+)*"
     r"(?:(?:<[^>{;]+>\s*)?(?P<return>[A-Za-z_]\w*(?:[<>\[\].?,\s]+[A-Za-z_]\w*)*)\s+)?"
@@ -1082,7 +1085,7 @@ JAVA_METHOD_RE = re.compile(
 JAVA_CALL_RE = re.compile(r"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\(")
 JAVA_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:final\s+)?(?:[A-Za-z_]\w*(?:<[^;=(){}]+>)?|var)\s+)?"
-    r"(?P<name>[A-Za-z_]\w*)\s*=\s*new\s+(?P<class>[A-Za-z_]\w*)\s*\(",
+    r"(?P<name>[A-Za-z_]\w*)\s*=\s*new\s+(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(",
     re.M,
 )
 JAVA_KEYWORDS = {
@@ -1106,20 +1109,24 @@ JAVA_KEYWORDS = {
 def _build_java_call_graph(root: Path) -> Graph:
     graph = Graph()
     methods: list[JavaMethod] = []
-    class_methods: dict[tuple[str, str], set[str]] = {}
+    class_methods: dict[tuple[str, str, str], set[str]] = {}
+    class_refs: dict[tuple[str, str], set[tuple[str, str]]] = {}
     files: dict[Path, str] = {}
+    file_packages: dict[Path, str] = {}
 
     for path in iter_files(root):
         if path.suffix != ".java":
             continue
         rel = path.relative_to(root).as_posix()
         text = read_text(path)
+        package_name = _java_package(text)
         files[path] = text
-        for method in _java_methods(path, rel, text):
+        file_packages[path] = package_name
+        for method in _java_methods(path, rel, text, package_name):
             methods.append(method)
-            class_methods.setdefault((method.class_name, method.name), set()).add(method.id)
+            class_methods.setdefault((method.package, method.class_name, method.name), set()).add(method.id)
+            class_refs.setdefault((method.package, method.class_name), set()).add((method.package, method.class_name))
 
-    known_classes = {class_name for class_name, _method_name in class_methods}
     for path, text in files.items():
         rel = path.relative_to(root).as_posix()
         file_id = rel_id("file", root, path)
@@ -1140,6 +1147,7 @@ def _build_java_call_graph(root: Path) -> Graph:
             },
         )
         graph.add_edge(file_id, method.id, "defines")
+        known_classes = _java_known_class_refs(text, file_packages[method.path], class_refs)
         instance_aliases = _java_instance_aliases(body, known_classes)
         for call_match in JAVA_CALL_RE.finditer(body):
             call = call_match.group(1)
@@ -1149,7 +1157,13 @@ def _build_java_call_graph(root: Path) -> Graph:
                 continue
             if (base in JAVA_KEYWORDS and base != "this") or call == method.name:
                 continue
-            target_id = _java_method_call_target(call, method.class_name, class_methods, instance_aliases)
+            target_id = _java_method_call_target(
+                call,
+                (method.package, method.class_name),
+                class_methods,
+                instance_aliases,
+                known_classes,
+            )
             if not target_id:
                 target_id = f"java:call:{call}"
                 graph.add_node(target_id, call, attributes={"kind": "call_target", "language": "java"})
@@ -1158,7 +1172,12 @@ def _build_java_call_graph(root: Path) -> Graph:
     return graph
 
 
-def _java_methods(path: Path, rel: str, text: str) -> list[JavaMethod]:
+def _java_package(text: str) -> str:
+    match = JAVA_PACKAGE_RE.search(text)
+    return match.group("package") if match else ""
+
+
+def _java_methods(path: Path, rel: str, text: str, package_name: str) -> list[JavaMethod]:
     methods: list[JavaMethod] = []
     for class_match in JAVA_TYPE_RE.finditer(text):
         class_name = class_match.group("name")
@@ -1177,37 +1196,64 @@ def _java_methods(path: Path, rel: str, text: str) -> list[JavaMethod]:
             method_body_start = class_offset + method_match.end() - 1
             method_body = _javascript_braced_block(text, method_body_start)
             end = method_body_start + len(method_body) + 2 if method_body is not None else class_offset + method_match.end()
-            methods.append(JavaMethod(path, rel, class_name, method_name, start, end))
+            methods.append(JavaMethod(path, rel, package_name, class_name, method_name, start, end))
     return methods
 
 
-def _java_instance_aliases(body: str, known_classes: set[str]) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    assignments: dict[str, set[str | None]] = {}
+def _java_known_class_refs(
+    text: str,
+    package_name: str,
+    class_refs: dict[tuple[str, str], set[tuple[str, str]]],
+) -> dict[str, tuple[str, str]]:
+    known: dict[str, tuple[str, str]] = {}
+    for (indexed_package, class_name), refs in class_refs.items():
+        if indexed_package == package_name and len(refs) == 1:
+            known[class_name] = next(iter(refs))
+
+    for match in JAVA_IMPORT_RE.finditer(text):
+        qualified_class = match.group("class")
+        if qualified_class.endswith(".*"):
+            continue
+        package, _, class_name = qualified_class.rpartition(".")
+        refs = class_refs.get((package, class_name), set())
+        if len(refs) == 1:
+            ref = next(iter(refs))
+            known[class_name] = ref
+            known[qualified_class] = ref
+    return known
+
+
+def _java_instance_aliases(
+    body: str,
+    known_classes: dict[str, tuple[str, str]],
+) -> dict[str, tuple[str, str]]:
+    aliases: dict[str, tuple[str, str]] = {}
+    assignments: dict[str, set[tuple[str, str] | None]] = {}
     for match in JAVA_NEW_INSTANCE_RE.finditer(body):
         name = match.group("name")
         class_name = match.group("class")
-        assignments.setdefault(name, set()).add(class_name if class_name in known_classes else None)
-    for name, class_names in assignments.items():
-        if len(class_names) == 1:
-            class_name = next(iter(class_names))
-            if class_name:
-                aliases[name] = class_name
+        assignments.setdefault(name, set()).add(known_classes.get(class_name))
+    for name, class_refs in assignments.items():
+        if len(class_refs) == 1:
+            class_ref = next(iter(class_refs))
+            if class_ref:
+                aliases[name] = class_ref
     return aliases
 
 
 def _java_method_call_target(
     call: str,
-    current_class: str,
-    class_methods: dict[tuple[str, str], set[str]],
-    instance_aliases: dict[str, str],
+    current_class: tuple[str, str],
+    class_methods: dict[tuple[str, str, str], set[str]],
+    instance_aliases: dict[str, tuple[str, str]],
+    known_classes: dict[str, tuple[str, str]],
 ) -> str | None:
     receiver, separator, method_name = call.partition(".")
     if not separator:
-        method_ids = class_methods.get((current_class, receiver), set())
+        method_ids = class_methods.get((*current_class, receiver), set())
     else:
-        target_class = current_class if receiver == "this" else instance_aliases.get(receiver, receiver)
-        method_ids = class_methods.get((target_class, method_name), set())
+        target_class = current_class if receiver == "this" else instance_aliases.get(receiver) or known_classes.get(receiver)
+        method_ids = class_methods.get((*target_class, method_name), set()) if target_class else set()
     if len(method_ids) == 1:
         return next(iter(method_ids))
     return None

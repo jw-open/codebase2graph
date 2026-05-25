@@ -895,6 +895,65 @@ class App {
     assert not any(node["id"] in {"java:call:this.helper", "java:call:local", "java:call:service.helper"} for node in graph["nodes"])
 
 
+def test_java_call_graph_uses_imports_to_disambiguate_duplicate_class_names(tmp_path: Path) -> None:
+    package_a = tmp_path / "a"
+    package_b = tmp_path / "b"
+    package_a.mkdir()
+    package_b.mkdir()
+    (package_a / "Service.java").write_text(
+        """
+package a;
+
+public class Service {
+    int helper() {
+        return 1;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (package_b / "Service.java").write_text(
+        """
+package b;
+
+public class Service {
+    int helper() {
+        return 2;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+import a.Service;
+
+class App {
+    void main() {
+        Service service = new Service();
+        service.helper();
+        Service.helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:a/Service.java:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:b/Service.java:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"java:call:service.helper", "java:call:Service.helper"} for node in graph["nodes"])
+
+
 def test_rust_call_graph_resolves_functions_and_impl_methods(tmp_path: Path) -> None:
     (tmp_path / "main.rs").write_text(
         """
