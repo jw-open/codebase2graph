@@ -887,6 +887,61 @@ fn main() {
     assert not any(node["id"] in {"rust:call:helper", "rust:call:self.helper", "rust:call:service.helper"} for node in graph["nodes"])
 
 
+def test_rust_call_graph_resolves_local_module_imports(tmp_path: Path) -> None:
+    (tmp_path / "helpers.rs").write_text(
+        """
+pub fn direct() -> i32 {
+    1
+}
+
+pub fn qualified() -> i32 {
+    2
+}
+
+pub fn renamed_source() -> i32 {
+    3
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.rs").write_text(
+        """
+mod helpers;
+
+use helpers::{direct, renamed_source as renamed};
+
+fn main() {
+    direct();
+    renamed();
+    helpers::qualified();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:helpers.rs:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:helpers.rs:renamed_source"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:helpers.rs:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"rust:call:direct", "rust:call:renamed", "rust:call:helpers::qualified"}
+        for node in graph["nodes"]
+    )
+
+
 def test_rust_entity_graph_defines_types_functions_and_methods(tmp_path: Path) -> None:
     (tmp_path / "lib.rs").write_text(
         """

@@ -1191,6 +1191,7 @@ RUST_IMPL_RE = re.compile(
 RUST_CALL_RE = re.compile(
     r"\b([A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)?)\s*(?:::<[^>{}]+>)?\("
 )
+RUST_USE_RE = re.compile(r"^\s*use\s+(?P<path>[^;]+);", re.M)
 RUST_INSTANCE_RE = re.compile(
     r"\blet\s+(?:mut\s+)?(?P<name>[A-Za-z_]\w*)\s*(?::\s*[A-Za-z_]\w*)?\s*=\s*"
     r"(?P<type>[A-Za-z_]\w*)\s*(?:::|\{)",
@@ -1220,6 +1221,7 @@ def _build_rust_call_graph(root: Path) -> Graph:
     files: dict[Path, str] = {}
     callables: list[RustCallable] = []
     file_functions: dict[tuple[str, str], set[str]] = {}
+    module_functions: dict[tuple[str, str], set[str]] = {}
     methods: dict[tuple[str, str], set[str]] = {}
 
     for path in iter_files(root):
@@ -1228,12 +1230,14 @@ def _build_rust_call_graph(root: Path) -> Graph:
         rel = path.relative_to(root).as_posix()
         text = read_text(path)
         files[path] = text
+        module_key = _rust_module_key(root, path)
         for callable_item in _rust_callables(path, rel, text):
             callables.append(callable_item)
             if callable_item.owner:
                 methods.setdefault((callable_item.owner, callable_item.name), set()).add(callable_item.id)
             else:
                 file_functions.setdefault((rel, callable_item.name), set()).add(callable_item.id)
+                module_functions.setdefault((module_key, callable_item.name), set()).add(callable_item.id)
 
     known_types = {type_name for type_name, _method_name in methods}
     for path, text in files.items():
@@ -1246,6 +1250,8 @@ def _build_rust_call_graph(root: Path) -> Graph:
         body = text[callable_item.start : callable_item.end]
         file_id = rel_id("file", root, callable_item.path)
         local_functions = _rust_local_functions(file_functions, callable_item.rel)
+        imported_functions = _rust_imported_functions(text, module_functions)
+        module_key = _rust_module_key(root, callable_item.path)
         instance_aliases = _rust_instance_aliases(body, known_types)
         graph.add_node(
             callable_item.id,
@@ -1267,6 +1273,8 @@ def _build_rust_call_graph(root: Path) -> Graph:
                 continue
             target_id = (
                 local_functions.get(call)
+                or imported_functions.get(call)
+                or _rust_module_function_call_target(call, module_key, module_functions)
                 or _rust_method_call_target(call, callable_item.owner, methods, instance_aliases)
             )
             if target_id == callable_item.id or (not target_id and call == callable_item.name):
@@ -1277,6 +1285,16 @@ def _build_rust_call_graph(root: Path) -> Graph:
             graph.add_edge(callable_item.id, target_id, "calls")
 
     return graph
+
+
+def _rust_module_key(root: Path, path: Path) -> str:
+    rel = path.relative_to(root).with_suffix("")
+    if rel.name in {"main", "lib"} and rel.parent.as_posix() == ".":
+        return ""
+    if rel.name == "mod":
+        parent = rel.parent.as_posix()
+        return "" if parent == "." else parent.replace("/", "::")
+    return rel.as_posix().replace("/", "::")
 
 
 def _rust_callables(path: Path, rel: str, text: str) -> list[RustCallable]:
@@ -1328,6 +1346,89 @@ def _rust_local_functions(
         if indexed_rel == rel and len(function_ids) == 1:
             local[name] = next(iter(function_ids))
     return local
+
+
+def _rust_imported_functions(
+    text: str,
+    module_functions: dict[tuple[str, str], set[str]],
+) -> dict[str, str]:
+    imported: dict[str, str] = {}
+    for module_path, imported_name, local_name in _rust_use_function_aliases(text):
+        function_id = _unique_rust_module_function(module_functions, module_path, imported_name)
+        if function_id:
+            imported[local_name] = function_id
+    return imported
+
+
+def _rust_use_function_aliases(text: str) -> list[tuple[str, str, str]]:
+    aliases: list[tuple[str, str, str]] = []
+    for match in RUST_USE_RE.finditer(text):
+        path = match.group("path").strip()
+        brace_match = re.fullmatch(r"(?P<module>.+)::\{(?P<items>[^}]+)\}", path)
+        if brace_match:
+            module_path = _normal_rust_module_path(brace_match.group("module"))
+            for item in brace_match.group("items").split(","):
+                parsed = _parse_rust_use_item(item)
+                if parsed:
+                    imported_name, local_name = parsed
+                    aliases.append((module_path, imported_name, local_name))
+            continue
+        parts = path.rsplit("::", 1)
+        if len(parts) != 2:
+            continue
+        parsed = _parse_rust_use_item(parts[1])
+        if parsed:
+            imported_name, local_name = parsed
+            aliases.append((_normal_rust_module_path(parts[0]), imported_name, local_name))
+    return aliases
+
+
+def _parse_rust_use_item(item: str) -> tuple[str, str] | None:
+    item = item.strip()
+    if not item or item == "self" or item == "*":
+        return None
+    parts = re.split(r"\s+as\s+", item, maxsplit=1)
+    imported_name = parts[0].strip()
+    local_name = parts[1].strip() if len(parts) == 2 else imported_name
+    if re.fullmatch(r"[A-Za-z_]\w*", imported_name) and re.fullmatch(r"[A-Za-z_]\w*", local_name):
+        return imported_name, local_name
+    return None
+
+
+def _normal_rust_module_path(module_path: str) -> str:
+    parts = [part for part in module_path.split("::") if part and part not in {"crate", "self"}]
+    return "::".join(parts)
+
+
+def _rust_module_function_call_target(
+    call: str,
+    current_module: str,
+    module_functions: dict[tuple[str, str], set[str]],
+) -> str | None:
+    if "::" not in call:
+        return None
+    module_path, function_name = call.rsplit("::", 1)
+    module_path = _normal_rust_module_path(module_path)
+    candidate_modules = [module_path]
+    if current_module and module_path:
+        candidate_modules.append(f"{current_module}::{module_path}")
+    matches: set[str] = set()
+    for candidate in candidate_modules:
+        matches.update(module_functions.get((candidate, function_name), set()))
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
+def _unique_rust_module_function(
+    module_functions: dict[tuple[str, str], set[str]],
+    module_path: str,
+    function_name: str,
+) -> str | None:
+    function_ids = module_functions.get((module_path, function_name), set())
+    if len(function_ids) == 1:
+        return next(iter(function_ids))
+    return None
 
 
 def _rust_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
