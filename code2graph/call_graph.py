@@ -25,7 +25,9 @@ JS_FUNC_RE = re.compile(
     r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
     re.M,
 )
-JS_CALL_RE = re.compile(r"\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(")
+JS_CALL_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)?)\s*(?:\?\.)?\s*\("
+)
 JS_IMPORT_RE = re.compile(r"^\s*import\s+(?P<clause>.+?)\s+from\s+['\"](?P<module>[^'\"]+)['\"]", re.M)
 JS_REQUIRE_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*require\(['\"](?P<module>[^'\"]+)['\"]\)",
@@ -217,7 +219,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             )
             graph.add_edge(file_id, func_id, "defines")
             for call_match in JS_CALL_RE.finditer(body):
-                call = call_match.group(1)
+                call = _normalize_javascript_call(call_match.group(1))
                 base = call.split(".", 1)[0]
                 if base in JS_KEYWORDS or call == name:
                     continue
@@ -279,6 +281,10 @@ def _javascript_function_name(match: re.Match[str]) -> str | None:
     if re.match(r"^\s*export\s+default\b", match.group(0)):
         return "default"
     return None
+
+
+def _normalize_javascript_call(call: str) -> str:
+    return call.replace("?.", ".")
 
 
 def _local_javascript_member_call_target(call: str, local_functions: dict[str, str]) -> str | None:

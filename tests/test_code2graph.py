@@ -970,6 +970,37 @@ export function main() {
     )
 
 
+def test_typescript_optional_chained_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+class Service {
+  helper() {
+    return 1;
+  }
+}
+
+export function main() {
+  const service = new Service();
+  service?.helper?.();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] in {"js:call:service.helper", "js:function:service.ts:main"}
+        for edge in graph["edges"]
+    )
+
+
 def test_typescript_imported_instance_method_calls_resolve_to_project_methods(tmp_path: Path) -> None:
     (tmp_path / "service.ts").write_text(
         """
