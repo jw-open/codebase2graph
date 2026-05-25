@@ -153,6 +153,7 @@ class PythonCollector(ast.NodeVisitor):
                     self._super_method_call_target(child.func, enclosing_class_id)
                     or self._method_call_target(call_name, enclosing_class_id)
                     or self._instance_method_call_target(call_name, class_aliases)
+                    or self._instance_call_target(call_name, class_aliases)
                     or self._class_method_call_target(call_name, known_classes)
                     or self._class_call_target(call_name, known_classes)
                 )
@@ -227,6 +228,14 @@ class PythonCollector(ast.NodeVisitor):
         if not class_id:
             return None
         return self.known_methods.get((class_id, method_name))
+
+    def _instance_call_target(self, call_name: str, class_aliases: dict[str, str]) -> str | None:
+        if "." in call_name:
+            return None
+        class_id = class_aliases.get(call_name)
+        if not class_id:
+            return None
+        return self.known_methods.get((class_id, "__call__"))
 
     def _class_method_call_target(self, call_name: str, known_classes: dict[str, str]) -> str | None:
         receiver, _, method_name = call_name.rpartition(".")

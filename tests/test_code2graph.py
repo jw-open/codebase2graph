@@ -2905,6 +2905,39 @@ def main():
     assert not any(node["id"] == "py:call:service.helper" for node in graph["nodes"])
 
 
+def test_python_callable_instance_calls_resolve_to_call_method(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def __call__(self):
+        return 1
+
+class Plain:
+    pass
+
+def main():
+    service = Service()
+    plain = Plain()
+    service()
+    plain()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Service.__call__"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:service.py:main" and edge["to"] == "py:call:plain"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:service" for node in graph["nodes"])
+
+
 def test_python_attribute_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
