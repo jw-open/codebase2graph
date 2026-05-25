@@ -74,7 +74,7 @@ JS_CLASS_RE = re.compile(
 )
 JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
-    r"(?P<class>[A-Za-z_$][\w$]*)\s*\(",
+    r"(?P<class>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(",
 )
 JS_CONST_OBJECT_LITERAL_RE = re.compile(
     r"^\s*(?:export\s+)?const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*\{",
@@ -116,6 +116,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
     graph = Graph()
     files: list[tuple[Path, str, str, list[re.Match[str]]]] = []
     function_index: dict[tuple[str, str], set[str]] = {}
+    class_method_index: dict[tuple[str, str, str], set[str]] = {}
     default_function_index: dict[str, set[str]] = {}
     module_index: dict[str, set[Path]] = {}
     for path in iter_files(root):
@@ -136,6 +137,13 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         for name, function_id in {**local_functions, **object_method_targets}.items():
             for module_key in _javascript_module_keys(root, path):
                 function_index.setdefault((module_key, name), set()).add(function_id)
+        for (class_name, method_name), function_id in _local_javascript_class_methods(
+            rel,
+            text,
+            local_functions,
+        ).items():
+            for module_key in _javascript_module_keys(root, path):
+                class_method_index.setdefault((module_key, class_name, method_name), set()).add(function_id)
         for name, function_id in _default_javascript_function_ids(rel, matches).items():
             for module_key in _javascript_module_keys(root, path):
                 default_function_index.setdefault(module_key, set()).add(function_id)
@@ -154,7 +162,10 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             default_function_index,
             module_index,
         )
-        class_methods = _local_javascript_class_methods(rel, text, local_functions)
+        class_methods = {
+            **_local_javascript_class_methods(rel, text, local_functions),
+            **_imported_javascript_class_methods(root, path, text, class_method_index, module_index),
+        }
         known_classes = {class_name for class_name, _method_name in class_methods}
         class_bases = _local_javascript_class_bases(text, known_classes)
         method_owners = {
@@ -360,7 +371,7 @@ def _javascript_class_method_call_target(
     known_classes: set[str],
     class_methods: dict[tuple[str, str], str],
 ) -> str | None:
-    class_name, _, method_name = call.partition(".")
+    class_name, _, method_name = call.rpartition(".")
     if not method_name or class_name not in known_classes:
         return None
     return class_methods.get((class_name, method_name))
@@ -548,6 +559,126 @@ def _imported_javascript_function_ids(
         else:
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
+
+
+def _imported_javascript_class_methods(
+    root: Path,
+    path: Path,
+    text: str,
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_index: dict[str, set[Path]],
+) -> dict[tuple[str, str], str]:
+    imported: dict[tuple[str, str], str] = {}
+    for match in JS_IMPORT_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        _add_named_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
+        _add_namespace_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
+
+    for match in JS_REQUIRE_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        if binding.startswith("{"):
+            _add_named_javascript_class_imports(imported, class_method_index, module_keys, binding)
+        else:
+            _add_module_javascript_class_imports(imported, class_method_index, module_keys, binding)
+
+    for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        if binding.startswith("{"):
+            _add_named_javascript_class_imports(imported, class_method_index, module_keys, binding)
+        else:
+            _add_module_javascript_class_imports(imported, class_method_index, module_keys, binding)
+    return imported
+
+
+def _add_named_javascript_class_imports(
+    imported: dict[tuple[str, str], str],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    named_match = re.search(r"\{(?P<named>[^}]+)\}", clause)
+    if not named_match:
+        return
+    for item in named_match.group("named").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = re.split(r"\s+as\s+|\s*:\s*", item, maxsplit=1)
+        exported_name = parts[0].strip()
+        local_name = parts[1].strip() if len(parts) == 2 else exported_name
+        _add_bound_javascript_class_methods(imported, class_method_index, module_keys, exported_name, local_name)
+
+
+def _add_namespace_javascript_class_imports(
+    imported: dict[tuple[str, str], str],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    namespace_match = re.search(r"\*\s+as\s+([A-Za-z_$][\w$]*)", clause)
+    if namespace_match:
+        _add_module_javascript_class_imports(imported, class_method_index, module_keys, namespace_match.group(1))
+
+
+def _add_module_javascript_class_imports(
+    imported: dict[tuple[str, str], str],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_keys: list[str],
+    local_name: str,
+) -> None:
+    class_names = {
+        class_name
+        for module_key, class_name, _method_name in class_method_index
+        if module_key in module_keys
+    }
+    for class_name in class_names:
+        _add_bound_javascript_class_methods(
+            imported,
+            class_method_index,
+            module_keys,
+            class_name,
+            f"{local_name}.{class_name}",
+        )
+
+
+def _add_bound_javascript_class_methods(
+    imported: dict[tuple[str, str], str],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_keys: list[str],
+    exported_name: str,
+    local_name: str,
+) -> None:
+    method_names = {
+        method_name
+        for module_key, class_name, method_name in class_method_index
+        if module_key in module_keys and class_name == exported_name
+    }
+    for method_name in method_names:
+        target_id = _unique_javascript_class_method(class_method_index, module_keys, exported_name, method_name)
+        if target_id:
+            imported[(local_name, method_name)] = target_id
+
+
+def _unique_javascript_class_method(
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    module_keys: list[str],
+    class_name: str,
+    method_name: str,
+) -> str | None:
+    matches: set[str] = set()
+    for module_key in module_keys:
+        matches.update(class_method_index.get((module_key, class_name, method_name), set()))
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
 
 
 def _add_reexported_javascript_function_ids(

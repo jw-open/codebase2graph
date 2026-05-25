@@ -920,6 +920,57 @@ export function main() {
     assert not any(node["id"] in {"js:call:service.helper", "js:call:Service.helper"} for node in graph["nodes"])
 
 
+def test_typescript_imported_instance_method_calls_resolve_to_project_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+export class Service {
+  helper() {
+    return 1;
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { Service as Worker } from "./service";
+import * as services from "./service";
+
+export function direct() {
+  const service = new Worker();
+  return service.helper();
+}
+
+export function qualified() {
+  const service = new services.Service();
+  return service.helper() + services.Service.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:direct"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:qualified"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"]
+        in {
+            "js:call:service.helper",
+            "js:call:services.Service.helper",
+        }
+        for node in graph["nodes"]
+    )
+
+
 def test_typescript_super_method_calls_resolve_to_same_file_base_methods(tmp_path: Path) -> None:
     (tmp_path / "service.ts").write_text(
         """
