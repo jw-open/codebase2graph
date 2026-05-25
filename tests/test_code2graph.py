@@ -953,12 +953,21 @@ export function main() {
 
     graph = build_graph(tmp_path, "call").to_dict()
 
+    assert any(node["id"] == "js:class:service.ts:Service" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] == "js:class:service.ts:Service"
+        for edge in graph["edges"]
+    )
     assert any(
         edge["from"] == "js:function:service.ts:main"
         and edge["to"] == "js:function:service.ts:helper"
         for edge in graph["edges"]
     )
-    assert not any(node["id"] in {"js:call:service.helper", "js:call:Service.helper"} for node in graph["nodes"])
+    assert not any(
+        node["id"] in {"js:call:Service", "js:call:service.helper", "js:call:Service.helper"}
+        for node in graph["nodes"]
+    )
 
 
 def test_typescript_imported_instance_method_calls_resolve_to_project_methods(tmp_path: Path) -> None:

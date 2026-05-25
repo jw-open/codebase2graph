@@ -156,6 +156,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         file_id = rel_id("file", root, path)
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": _language(path), "path": rel})
         local_functions = _local_javascript_function_ids(rel, matches)
+        local_classes = _local_javascript_class_ids(rel, text)
         imported_functions = _imported_javascript_function_ids(
             root,
             path,
@@ -169,12 +170,27 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             **_imported_javascript_class_methods(root, path, text, class_method_index, module_index),
         }
         known_classes = {class_name for class_name, _method_name in class_methods}
+        known_class_targets = {class_name: class_id for class_name, class_id in local_classes.items()}
         class_bases = _local_javascript_class_bases(text, known_classes)
         method_owners = {
             function_id: class_name
             for (class_name, _method_name), function_id in class_methods.items()
         }
         object_method_targets = _local_javascript_object_method_targets(text, local_functions)
+        for class_name, class_id in local_classes.items():
+            class_match = _unique_javascript_class_match(text, class_name)
+            line = str(text.count("\n", 0, class_match.start()) + 1) if class_match else "1"
+            graph.add_node(
+                class_id,
+                class_name,
+                attributes={
+                    "kind": "class",
+                    "language": _language(path),
+                    "path": rel,
+                    "line": line,
+                },
+            )
+            graph.add_edge(file_id, class_id, "defines")
         for index, match in enumerate(matches):
             name = _javascript_function_name(match)
             if not name or name in JS_KEYWORDS:
@@ -221,6 +237,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                         )
                         or _javascript_instance_method_call_target(call, instance_aliases, class_methods)
                         or _javascript_class_method_call_target(call, known_classes, class_methods)
+                        or known_class_targets.get(call)
                         or object_method_targets.get(call)
                         or imported_functions.get(call)
                     )
@@ -238,6 +255,21 @@ def _local_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> di
         if name and name not in JS_KEYWORDS:
             counts[name] = counts.get(name, 0) + 1
     return {name: f"js:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _local_javascript_class_ids(rel: str, text: str) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    for match in JS_CLASS_RE.finditer(text):
+        name = match.group("name")
+        counts[name] = counts.get(name, 0) + 1
+    return {name: f"js:class:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _unique_javascript_class_match(text: str, name: str) -> re.Match[str] | None:
+    matches = [match for match in JS_CLASS_RE.finditer(text) if match.group("name") == name]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def _javascript_function_name(match: re.Match[str]) -> str | None:
