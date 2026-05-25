@@ -788,9 +788,14 @@ class _ClassAliasVisitor(ast.NodeVisitor):
         return None
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        class_id = _class_instantiation_target(node.value, self.local_classes)
         for target in node.targets:
-            self._record(target, class_id)
+            for assignment_target, assignment_value in _assignment_target_values(target, node.value):
+                class_id = (
+                    _class_instantiation_target(assignment_value, self.local_classes)
+                    if assignment_value is not None
+                    else None
+                )
+                self._record(assignment_target, class_id)
         self.generic_visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -844,9 +849,10 @@ class _FunctionAliasVisitor(ast.NodeVisitor):
         return None
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        function_id = self._reference_target(node.value)
         for target in node.targets:
-            self._record(target, function_id)
+            for assignment_target, assignment_value in _assignment_target_values(target, node.value):
+                function_id = self._reference_target(assignment_value) if assignment_value is not None else None
+                self._record(assignment_target, function_id)
         self.generic_visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -940,6 +946,17 @@ def _target_names(node: ast.AST) -> list[str]:
             names.extend(_target_names(element))
         return names
     return []
+
+
+def _assignment_target_values(target: ast.AST, value: ast.AST) -> list[tuple[ast.AST, ast.AST | None]]:
+    if isinstance(target, (ast.Tuple, ast.List)):
+        if not isinstance(value, (ast.Tuple, ast.List)) or len(target.elts) != len(value.elts):
+            return [(target, None)]
+        pairs: list[tuple[ast.AST, ast.AST | None]] = []
+        for target_element, value_element in zip(target.elts, value.elts):
+            pairs.extend(_assignment_target_values(target_element, value_element))
+        return pairs
+    return [(target, value)]
 
 
 def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) -> str | None:

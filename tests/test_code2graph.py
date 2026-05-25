@@ -1358,6 +1358,61 @@ def main():
     assert not any(node["id"] in {"py:call:local_alias", "py:call:imported_alias"} for node in graph["nodes"])
 
 
+def test_python_destructured_alias_calls_resolve_positionally(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+def imported():
+    return 1
+
+class Service:
+    def helper(self):
+        return 2
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import Service, imported
+
+def local():
+    return 3
+
+def main():
+    local_alias, imported_alias = local, imported
+    worker, unresolved = Service(), object()
+    local_alias()
+    imported_alias()
+    worker.helper()
+    unresolved.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:app.py:local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:helpers.py:imported"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] == "py:method:helpers.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:unresolved.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"py:call:local_alias", "py:call:imported_alias", "py:call:worker.helper"}
+        for node in graph["nodes"]
+    )
+
+
 def test_python_module_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """
