@@ -12,8 +12,12 @@ JS_FUNC_RE = re.compile(
     r"^\s*(?:(?:export\s+default\s+)|(?:export\s+))?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
     r"|^\s*export\s+default\s+(?:async\s+)?function\s*\("
     r"|^\s*export\s+default\s+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|^\s*export\s+default\s+(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|^\s*export\s+default\s+(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"
     r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
@@ -169,9 +173,12 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 },
             )
             graph.add_edge(file_id, func_id, "defines")
-            for call in JS_CALL_RE.findall(body):
+            for call_match in JS_CALL_RE.finditer(body):
+                call = call_match.group(1)
                 base = call.split(".", 1)[0]
                 if base in JS_KEYWORDS or call == name:
+                    continue
+                if _javascript_call_is_definition_name(body, call_match):
                     continue
                 if call in shadowed_functions:
                     target_id = function_aliases.get(call)
@@ -393,7 +400,8 @@ def _javascript_parameter_names(body: str) -> set[str]:
     header = body.split("{", 1)[0]
     params: str | None = None
     arrow_match = re.search(
-        r"=\s*(?:async\s*)?(?:\((?P<group>[^)]*)\)|(?P<single>[A-Za-z_$][\w$]*))\s*=>",
+        r"(?:=|\()\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)*"
+        r"(?:async\s*)?(?:\((?P<group>[^)]*)\)|(?P<single>[A-Za-z_$][\w$]*))\s*=>",
         header,
     )
     if arrow_match:
@@ -408,11 +416,20 @@ def _javascript_parameter_names(body: str) -> set[str]:
 
     if not params:
         return set()
-    return {
-        part.strip().lstrip(".").split("=", 1)[0].strip()
-        for part in params.split(",")
-        if re.match(r"^\s*\.{0,3}[A-Za-z_$][\w$]*(?:\s*=.*)?$", part)
-    }
+    names: set[str] = set()
+    for part in params.split(","):
+        if not re.match(r"^\s*\.{0,3}[A-Za-z_$][\w$]*(?:\s*:\s*[^=]+)?(?:\s*=.*)?$", part):
+            continue
+        name = part.strip().lstrip(".").split("=", 1)[0].split(":", 1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _javascript_call_is_definition_name(body: str, call_match: re.Match[str]) -> bool:
+    line_start = body.rfind("\n", 0, call_match.start()) + 1
+    line_prefix = body[line_start : call_match.start()]
+    return bool(re.search(r"\bfunction\s+$", line_prefix))
 
 
 def _default_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:

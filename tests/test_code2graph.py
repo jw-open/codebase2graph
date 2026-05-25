@@ -293,6 +293,97 @@ export function main() {
     assert not any(node["id"] in {"js:call:runArrow", "js:call:runFunction"} for node in graph["nodes"])
 
 
+def test_typescript_wrapped_arrow_exports_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function helper() {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "component.tsx").write_text(
+        """
+import { memo } from "react";
+import { helper } from "./helpers";
+
+export const Component = memo((props: { helper: () => number }) => {
+  props.helper();
+  return helper();
+});
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { Component } from "./component";
+
+export function main() {
+  return Component();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:component.tsx:Component" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:component.tsx:Component"
+        and edge["to"] == "js:function:helpers.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:component.tsx:Component"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:component.tsx:Component"
+        and edge["to"] == "js:call:props.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:Component" for node in graph["nodes"])
+
+
+def test_typescript_wrapped_default_function_exports_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "component.tsx").write_text(
+        """
+import { forwardRef } from "react";
+
+export default forwardRef<HTMLDivElement, Props>(function Component(props: Props) {
+  return props.render();
+});
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import Component from "./component";
+
+export function main() {
+  return Component();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:component.tsx:default" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:component.tsx:default"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:component.tsx:default"
+        and edge["to"] == "js:call:props.render"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:Component" for node in graph["nodes"])
+
+
 def test_typescript_reexported_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """
