@@ -1514,6 +1514,46 @@ class App {
     assert not any(node["id"] in {"java:call:service.helper", "java:call:Service.helper"} for node in graph["nodes"])
 
 
+def test_java_call_graph_resolves_package_wildcard_import_methods(tmp_path: Path) -> None:
+    package_a = tmp_path / "a"
+    package_a.mkdir()
+    (package_a / "Service.java").write_text(
+        """
+package a;
+
+public class Service {
+    int helper() {
+        return 1;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+import a.*;
+
+class App {
+    void main() {
+        Service service = new Service();
+        service.helper();
+        Service.helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:a/Service.java:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"java:call:service.helper", "java:call:Service.helper"} for node in graph["nodes"])
+
+
 def test_java_call_graph_resolves_static_imported_methods(tmp_path: Path) -> None:
     package_a = tmp_path / "a"
     package_a.mkdir()

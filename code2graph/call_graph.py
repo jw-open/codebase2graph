@@ -1488,6 +1488,7 @@ JAVA_TYPE_RE = re.compile(
 )
 JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
 JAVA_IMPORT_RE = re.compile(r"^\s*import\s+(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
+JAVA_WILDCARD_IMPORT_RE = re.compile(r"^\s*import\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.\*\s*;", re.M)
 JAVA_STATIC_IMPORT_RE = re.compile(
     r"^\s*import\s+static\s+(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(?P<member>[A-Za-z_]\w*|\*)\s*;",
     re.M,
@@ -1638,6 +1639,16 @@ def _java_known_class_refs(
             ref = next(iter(refs))
             known[class_name] = ref
             known[qualified_class] = ref
+    wildcard_candidates: dict[str, set[tuple[str, str]]] = {}
+    for match in JAVA_WILDCARD_IMPORT_RE.finditer(text):
+        imported_package = match.group("package")
+        for (indexed_package, class_name), refs in class_refs.items():
+            if indexed_package == imported_package:
+                wildcard_candidates.setdefault(class_name, set()).update(refs)
+
+    for class_name, refs in wildcard_candidates.items():
+        if class_name not in known and len(refs) == 1:
+            known[class_name] = next(iter(refs))
     return known
 
 
