@@ -47,6 +47,11 @@ JS_ALIAS_ASSIGN_RE = re.compile(
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
     re.M,
 )
+JS_CLASS_RE = re.compile(r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)[^{]*\{")
+JS_NEW_INSTANCE_RE = re.compile(
+    r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
+    r"(?P<class>[A-Za-z_$][\w$]*)\s*\(",
+)
 JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 JS_KEYWORDS = {
     "if",
@@ -116,6 +121,8 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             default_function_index,
             module_index,
         )
+        class_methods = _local_javascript_class_methods(rel, text, local_functions)
+        known_classes = {class_name for class_name, _method_name in class_methods}
         for index, match in enumerate(matches):
             name = _javascript_function_name(match)
             if not name or name in JS_KEYWORDS:
@@ -128,6 +135,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 body,
                 {**local_functions, **imported_functions},
             )
+            instance_aliases = _javascript_instance_aliases(body, known_classes)
             graph.add_node(
                 func_id,
                 name,
@@ -149,6 +157,8 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                     target_id = (
                         local_functions.get(call)
                         or _local_javascript_member_call_target(call, local_functions)
+                        or _javascript_instance_method_call_target(call, instance_aliases, class_methods)
+                        or _javascript_class_method_call_target(call, known_classes, class_methods)
                         or imported_functions.get(call)
                     )
                 if not target_id:
@@ -181,6 +191,86 @@ def _local_javascript_member_call_target(call: str, local_functions: dict[str, s
     if receiver != "this" or not member or "." in member:
         return None
     return local_functions.get(member)
+
+
+def _local_javascript_class_methods(
+    rel: str,
+    text: str,
+    local_functions: dict[str, str],
+) -> dict[tuple[str, str], str]:
+    class_counts: dict[str, int] = {}
+    discovered: list[tuple[str, str]] = []
+    for class_match in JS_CLASS_RE.finditer(text):
+        class_name = class_match.group("name")
+        class_counts[class_name] = class_counts.get(class_name, 0) + 1
+        class_body = _javascript_braced_block(text, class_match.end() - 1)
+        if class_body is None:
+            continue
+        for method_match in JS_FUNC_RE.finditer(class_body):
+            method_name = _javascript_function_name(method_match)
+            if method_name and method_name not in JS_KEYWORDS and method_name != "constructor":
+                discovered.append((class_name, method_name))
+
+    methods: dict[tuple[str, str], str] = {}
+    for class_name, method_name in discovered:
+        function_id = local_functions.get(method_name)
+        if function_id and class_counts.get(class_name) == 1:
+            methods[(class_name, method_name)] = function_id
+    return methods
+
+
+def _javascript_braced_block(text: str, open_brace_index: int) -> str | None:
+    depth = 0
+    for index in range(open_brace_index, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace_index + 1 : index]
+    return None
+
+
+def _javascript_instance_aliases(body: str, known_classes: set[str]) -> dict[str, str]:
+    assignments: dict[str, set[str | None]] = {}
+    for match in JS_NEW_INSTANCE_RE.finditer(body):
+        name = match.group("name")
+        class_name = match.group("class")
+        assignments.setdefault(name, set()).add(class_name if class_name in known_classes else None)
+
+    aliases: dict[str, str] = {}
+    for name, class_names in assignments.items():
+        if len(class_names) == 1:
+            class_name = next(iter(class_names))
+            if class_name:
+                aliases[name] = class_name
+    return aliases
+
+
+def _javascript_instance_method_call_target(
+    call: str,
+    instance_aliases: dict[str, str],
+    class_methods: dict[tuple[str, str], str],
+) -> str | None:
+    receiver, _, method_name = call.partition(".")
+    if not method_name:
+        return None
+    class_name = instance_aliases.get(receiver)
+    if not class_name:
+        return None
+    return class_methods.get((class_name, method_name))
+
+
+def _javascript_class_method_call_target(
+    call: str,
+    known_classes: set[str],
+    class_methods: dict[tuple[str, str], str],
+) -> str | None:
+    class_name, _, method_name = call.partition(".")
+    if not method_name or class_name not in known_classes:
+        return None
+    return class_methods.get((class_name, method_name))
 
 
 def _javascript_function_aliases(body: str, known_functions: dict[str, str]) -> tuple[dict[str, str], set[str]]:

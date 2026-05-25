@@ -550,6 +550,76 @@ class Service {
     assert not any(node["id"] == "js:call:this.helper" for node in graph["nodes"])
 
 
+def test_typescript_local_instance_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+class Service {
+  helper() {
+    return 1;
+  }
+}
+
+export function main() {
+  const service = new Service();
+  return service.helper() + Service.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:service.helper", "js:call:Service.helper"} for node in graph["nodes"])
+
+
+def test_typescript_reassigned_instance_method_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+class First {
+  helper() {
+    return 1;
+  }
+}
+
+class Second {
+  helper() {
+    return 2;
+  }
+}
+
+export function main(flag: boolean) {
+  let service = new First();
+  if (flag) {
+    service = new Second();
+  }
+  return service.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:service.ts:main" and edge["to"] == "js:call:service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "js:function:service.ts:main"
+        and edge["to"] in {
+            "js:function:service.ts:First.helper",
+            "js:function:service.ts:Second.helper",
+            "js:function:service.ts:helper",
+        }
+        for edge in graph["edges"]
+    )
+
+
 def test_go_call_graph_resolves_same_package_and_local_imports(tmp_path: Path) -> None:
     (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
     pkg = tmp_path / "pkg"
