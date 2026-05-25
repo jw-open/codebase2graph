@@ -22,6 +22,7 @@ class PythonCollector(ast.NodeVisitor):
         module_function_aliases: dict[str, str],
         module_class_aliases: dict[str, str],
         module_instance_aliases: dict[str, str],
+        class_instance_aliases: dict[str, dict[str, str]],
         function_index: dict[tuple[str, str], str],
         class_index: dict[tuple[str, str], str],
     ) -> None:
@@ -38,6 +39,7 @@ class PythonCollector(ast.NodeVisitor):
         self.module_function_aliases = module_function_aliases
         self.module_class_aliases = module_class_aliases
         self.module_instance_aliases = module_instance_aliases
+        self.class_instance_aliases = class_instance_aliases
         self.function_index = function_index
         self.class_index = class_index
         self.current_module = _module_name(root, path)
@@ -112,7 +114,11 @@ class PythonCollector(ast.NodeVisitor):
             **self.local_classes,
             **scoped_imported_classes,
         }
-        class_aliases = {**self.module_instance_aliases, **_function_class_aliases(node, known_classes)}
+        class_aliases = {
+            **self.module_instance_aliases,
+            **(self.class_instance_aliases.get(enclosing_class_id, {}) if enclosing_class_id else {}),
+            **_function_class_aliases(node, known_classes),
+        }
         nested_functions = self._nested_function_ids(node)
         enclosing_functions = _merge_scopes(self.lexical_function_scopes)
         known_functions = {
@@ -280,6 +286,7 @@ def build_python_graph(root: Path) -> Graph:
     class_index = _project_class_index(root, parsed_modules)
     class_bases = _project_class_base_ids(root, parsed_modules, class_index)
     method_index = _project_method_index(root, parsed_modules, class_index, class_bases)
+    class_instance_aliases = _project_class_instance_aliases(root, parsed_modules, class_index)
     for path, tree in parsed_modules:
         local_functions = _local_function_ids(root, path, tree)
         local_classes = _local_class_ids(root, path, tree)
@@ -313,6 +320,7 @@ def build_python_graph(root: Path) -> Graph:
             module_function_aliases,
             module_class_aliases,
             module_instance_aliases,
+            class_instance_aliases,
             function_index,
             class_index,
         ).visit(tree)
@@ -449,6 +457,33 @@ def _project_class_base_ids(
             if bases:
                 class_bases[class_id] = bases
     return class_bases
+
+
+def _project_class_instance_aliases(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    class_index: dict[tuple[str, str], str],
+) -> dict[str, dict[str, str]]:
+    class_instance_aliases: dict[str, dict[str, str]] = {}
+    for path, tree in modules:
+        local_classes = _local_class_ids(root, path, tree)
+        imported_classes = _imported_class_ids(root, path, tree, class_index)
+        module_class_aliases = _module_class_aliases(
+            tree.body,
+            {**imported_classes, **local_classes},
+            reserved=set(local_classes),
+        )
+        known_classes = {**imported_classes, **module_class_aliases, **local_classes}
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            class_id = local_classes.get(node.name)
+            if not class_id:
+                continue
+            aliases = _class_instance_aliases(node, known_classes)
+            if aliases:
+                class_instance_aliases[class_id] = aliases
+    return class_instance_aliases
 
 
 def _add_inherited_methods(
@@ -695,6 +730,23 @@ def _function_class_aliases(
             class_id = next(iter(class_ids))
             if class_id:
                 aliases[name] = class_id
+    return aliases
+
+
+def _class_instance_aliases(node: ast.ClassDef, known_classes: dict[str, str]) -> dict[str, str]:
+    visitor = _ClassAliasVisitor(known_classes)
+    for child in node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for statement in child.body:
+                visitor.visit(statement)
+
+    aliases: dict[str, str] = {}
+    for name, class_ids in visitor.assignments.items():
+        if not name.startswith(("self.", "cls.")) or len(class_ids) != 1:
+            continue
+        class_id = next(iter(class_ids))
+        if class_id:
+            aliases[name] = class_id
     return aliases
 
 

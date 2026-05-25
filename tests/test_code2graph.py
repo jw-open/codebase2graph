@@ -2037,6 +2037,73 @@ class Controller:
     assert not any(node["id"] == "py:call:self.service.helper" for node in graph["nodes"])
 
 
+def test_python_init_attribute_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+class Controller:
+    def __init__(self):
+        self.service = Service()
+
+    def main(self):
+        return self.service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:method:service.py:Controller.main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:self.service.helper" for node in graph["nodes"])
+
+
+def test_python_reassigned_class_attribute_instance_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class First:
+    def helper(self):
+        return 1
+
+class Second:
+    def helper(self):
+        return 2
+
+class Controller:
+    def __init__(self, flag):
+        self.service = First()
+        if flag:
+            self.service = Second()
+
+    def main(self):
+        return self.service.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:method:service.py:Controller.main"
+        and edge["to"] == "py:call:self.service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:method:service.py:Controller.main"
+        and edge["to"] in {
+            "py:method:service.py:First.helper",
+            "py:method:service.py:Second.helper",
+        }
+        for edge in graph["edges"]
+    )
+
+
 def test_python_bound_method_alias_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
