@@ -687,6 +687,57 @@ function main() {
     assert not any(node["id"] in {"js:call:directAlias", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_typescript_import_equals_calls_resolve_to_project_functions_and_methods(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function direct() {
+  return 1;
+}
+
+export class Service {
+  helper() {
+    return direct();
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import helpers = require("./helpers");
+
+export function main() {
+  const service = new helpers.Service();
+  helpers.direct();
+  service.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:helpers.ts:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:class:helpers.ts:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:helpers.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"js:call:helpers.direct", "js:call:helpers.Service", "js:call:service.helper"}
+        for node in graph["nodes"]
+    )
+
+
 def test_javascript_commonjs_export_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.js").write_text(
         """

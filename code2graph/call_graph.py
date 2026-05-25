@@ -33,6 +33,10 @@ JS_REQUIRE_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*require\(['\"](?P<module>[^'\"]+)['\"]\)",
     re.M,
 )
+JS_IMPORT_EQUALS_RE = re.compile(
+    r"^\s*import\s+(?P<binding>[A-Za-z_$][\w$]*)\s*=\s*require\(\s*['\"](?P<module>[^'\"]+)['\"]\s*\)",
+    re.M,
+)
 JS_DYNAMIC_IMPORT_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?:await\s+)?import\(\s*['\"](?P<module>[^'\"]+)['\"]\s*\)",
@@ -620,6 +624,14 @@ def _imported_javascript_function_ids(
             _add_bound_default_javascript_import(imported, default_function_index, module_keys, binding)
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
 
+    for match in JS_IMPORT_EQUALS_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        _add_bound_default_javascript_import(imported, default_function_index, module_keys, binding)
+        _add_module_javascript_imports(imported, function_index, module_keys, binding)
+
     for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
         module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
         if not module_keys:
@@ -665,6 +677,12 @@ def _imported_javascript_class_methods(
         else:
             _add_module_javascript_class_imports(imported, class_method_index, module_keys, binding)
 
+    for match in JS_IMPORT_EQUALS_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        _add_module_javascript_class_imports(imported, class_method_index, module_keys, match.group("binding").strip())
+
     for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
         module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
         if not module_keys:
@@ -703,6 +721,12 @@ def _imported_javascript_class_ids(
             _add_named_javascript_class_ids(imported, class_index, module_keys, binding)
         else:
             _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {binding}")
+
+    for match in JS_IMPORT_EQUALS_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {match.group('binding').strip()}")
 
     for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
         module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
