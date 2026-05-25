@@ -23,6 +23,7 @@ class PythonCollector(ast.NodeVisitor):
         module_class_aliases: dict[str, str],
         module_instance_aliases: dict[str, str],
         class_instance_aliases: dict[str, dict[str, str]],
+        function_return_classes: dict[str, str],
         function_index: dict[tuple[str, str], str],
         class_index: dict[tuple[str, str], str],
     ) -> None:
@@ -40,6 +41,7 @@ class PythonCollector(ast.NodeVisitor):
         self.module_class_aliases = module_class_aliases
         self.module_instance_aliases = module_instance_aliases
         self.class_instance_aliases = class_instance_aliases
+        self.function_return_classes = function_return_classes
         self.function_index = function_index
         self.class_index = class_index
         self.current_module = _module_name(root, path)
@@ -114,11 +116,6 @@ class PythonCollector(ast.NodeVisitor):
             **self.local_classes,
             **scoped_imported_classes,
         }
-        class_aliases = {
-            **self.module_instance_aliases,
-            **(self.class_instance_aliases.get(enclosing_class_id, {}) if enclosing_class_id else {}),
-            **_function_class_aliases(node, known_classes),
-        }
         nested_functions = self._nested_function_ids(node)
         enclosing_functions = _merge_scopes(self.lexical_function_scopes)
         known_functions = {
@@ -128,6 +125,12 @@ class PythonCollector(ast.NodeVisitor):
             **scoped_imported_functions,
             **enclosing_functions,
             **nested_functions,
+        }
+        known_factory_returns = _function_return_class_aliases(known_functions, self.function_return_classes)
+        class_aliases = {
+            **self.module_instance_aliases,
+            **(self.class_instance_aliases.get(enclosing_class_id, {}) if enclosing_class_id else {}),
+            **_function_class_aliases(node, known_classes, known_factory_returns),
         }
         known_callables = {
             **known_functions,
@@ -284,9 +287,16 @@ def build_python_graph(root: Path) -> Graph:
 
     function_index = _project_function_index(root, parsed_modules)
     class_index = _project_class_index(root, parsed_modules)
+    function_return_classes = _project_function_return_class_ids(root, parsed_modules, class_index)
     class_bases = _project_class_base_ids(root, parsed_modules, class_index)
     method_index = _project_method_index(root, parsed_modules, class_index, class_bases)
-    class_instance_aliases = _project_class_instance_aliases(root, parsed_modules, class_index)
+    class_instance_aliases = _project_class_instance_aliases(
+        root,
+        parsed_modules,
+        class_index,
+        function_index,
+        function_return_classes,
+    )
     for path, tree in parsed_modules:
         local_functions = _local_function_ids(root, path, tree)
         local_classes = _local_class_ids(root, path, tree)
@@ -305,6 +315,10 @@ def build_python_graph(root: Path) -> Graph:
         module_instance_aliases = _module_instance_aliases(
             tree.body,
             {**imported_classes, **module_class_aliases, **local_classes},
+            _function_return_class_aliases(
+                {**imported_functions, **module_function_aliases, **local_functions},
+                function_return_classes,
+            ),
             reserved={*imported_classes, *module_class_aliases, *local_classes},
         )
         PythonCollector(
@@ -321,6 +335,7 @@ def build_python_graph(root: Path) -> Graph:
             module_class_aliases,
             module_instance_aliases,
             class_instance_aliases,
+            function_return_classes,
             function_index,
             class_index,
         ).visit(tree)
@@ -459,13 +474,14 @@ def _project_class_base_ids(
     return class_bases
 
 
-def _project_class_instance_aliases(
+def _project_function_return_class_ids(
     root: Path,
     modules: list[tuple[Path, ast.Module]],
     class_index: dict[tuple[str, str], str],
-) -> dict[str, dict[str, str]]:
-    class_instance_aliases: dict[str, dict[str, str]] = {}
+) -> dict[str, str]:
+    return_classes: dict[str, str] = {}
     for path, tree in modules:
+        local_functions = _local_function_ids(root, path, tree)
         local_classes = _local_class_ids(root, path, tree)
         imported_classes = _imported_class_ids(root, path, tree, class_index)
         module_class_aliases = _module_class_aliases(
@@ -475,12 +491,96 @@ def _project_class_instance_aliases(
         )
         known_classes = {**imported_classes, **module_class_aliases, **local_classes}
         for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            function_id = local_functions.get(node.name)
+            if not function_id:
+                continue
+            class_id = _function_return_class_id(node, known_classes)
+            if class_id:
+                return_classes[function_id] = class_id
+    return return_classes
+
+
+def _function_return_class_id(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    known_classes: dict[str, str],
+) -> str | None:
+    annotation_id = _annotation_class_id(node.returns, known_classes)
+    returned_ids = _returned_class_ids(node, known_classes)
+    if annotation_id:
+        return annotation_id if returned_ids == {annotation_id} else None
+    if len(returned_ids) == 1:
+        class_id = next(iter(returned_ids))
+        return class_id or None
+    return None
+
+
+def _annotation_class_id(node: ast.AST | None, known_classes: dict[str, str]) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return known_classes.get(node.value)
+    name = _call_name(node)
+    return known_classes.get(name) if name else None
+
+
+def _returned_class_ids(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    known_classes: dict[str, str],
+) -> set[str]:
+    visitor = _ReturnClassVisitor(known_classes)
+    for child in node.body:
+        visitor.visit(child)
+    return visitor.class_ids
+
+
+def _function_return_class_aliases(
+    known_functions: dict[str, str],
+    function_return_classes: dict[str, str],
+) -> dict[str, str]:
+    return {
+        name: class_id
+        for name, function_id in known_functions.items()
+        if (class_id := function_return_classes.get(function_id))
+    }
+
+
+def _project_class_instance_aliases(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    class_index: dict[tuple[str, str], str],
+    function_index: dict[tuple[str, str], str],
+    function_return_classes: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    class_instance_aliases: dict[str, dict[str, str]] = {}
+    for path, tree in modules:
+        local_functions = _local_function_ids(root, path, tree)
+        local_classes = _local_class_ids(root, path, tree)
+        imported_functions = _imported_function_ids(root, path, tree, function_index)
+        imported_classes = _imported_class_ids(root, path, tree, class_index)
+        module_function_aliases = _module_function_aliases(
+            tree.body,
+            {**imported_functions, **local_functions},
+            reserved=set(local_functions),
+        )
+        module_class_aliases = _module_class_aliases(
+            tree.body,
+            {**imported_classes, **local_classes},
+            reserved=set(local_classes),
+        )
+        known_classes = {**imported_classes, **module_class_aliases, **local_classes}
+        known_factory_returns = _function_return_class_aliases(
+            {**imported_functions, **module_function_aliases, **local_functions},
+            function_return_classes,
+        )
+        for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
             class_id = local_classes.get(node.name)
             if not class_id:
                 continue
-            aliases = _class_instance_aliases(node, known_classes)
+            aliases = _class_instance_aliases(node, known_classes, known_factory_returns)
             if aliases:
                 class_instance_aliases[class_id] = aliases
     return class_instance_aliases
@@ -749,8 +849,9 @@ def _local_method_ids(root: Path, path: Path, tree: ast.Module) -> dict[tuple[st
 def _function_class_aliases(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     local_classes: dict[str, str],
+    factory_returns: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    visitor = _ClassAliasVisitor(local_classes)
+    visitor = _ClassAliasVisitor(local_classes, factory_returns or {})
     for child in node.body:
         visitor.visit(child)
 
@@ -763,8 +864,12 @@ def _function_class_aliases(
     return aliases
 
 
-def _class_instance_aliases(node: ast.ClassDef, known_classes: dict[str, str]) -> dict[str, str]:
-    visitor = _ClassAliasVisitor(known_classes)
+def _class_instance_aliases(
+    node: ast.ClassDef,
+    known_classes: dict[str, str],
+    factory_returns: dict[str, str] | None = None,
+) -> dict[str, str]:
+    visitor = _ClassAliasVisitor(known_classes, factory_returns or {})
     for child in node.body:
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for statement in child.body:
@@ -822,10 +927,11 @@ def _module_class_aliases(
 def _module_instance_aliases(
     body: list[ast.stmt],
     known_classes: dict[str, str],
+    factory_returns: dict[str, str],
     *,
     reserved: set[str],
 ) -> dict[str, str]:
-    aliases, shadowed = _aliases_from_body(body, _ClassAliasVisitor(known_classes))
+    aliases, shadowed = _aliases_from_body(body, _ClassAliasVisitor(known_classes, factory_returns))
     return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
 
 
@@ -853,8 +959,9 @@ def _merge_scopes(scopes: list[dict[str, str]]) -> dict[str, str]:
 
 
 class _ClassAliasVisitor(ast.NodeVisitor):
-    def __init__(self, local_classes: dict[str, str]) -> None:
+    def __init__(self, local_classes: dict[str, str], factory_returns: dict[str, str] | None = None) -> None:
         self.local_classes = local_classes
+        self.factory_returns = factory_returns or {}
         self.assignments: dict[str, set[str | None]] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -873,7 +980,7 @@ class _ClassAliasVisitor(ast.NodeVisitor):
         for target in node.targets:
             for assignment_target, assignment_value in _assignment_target_values(target, node.value):
                 class_id = (
-                    _class_instantiation_target(assignment_value, self.local_classes)
+                    _class_instantiation_target(assignment_value, self.local_classes, self.factory_returns)
                     if assignment_value is not None
                     else None
                 )
@@ -881,7 +988,11 @@ class _ClassAliasVisitor(ast.NodeVisitor):
         self.generic_visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        class_id = _class_instantiation_target(node.value, self.local_classes) if node.value else None
+        class_id = (
+            _class_instantiation_target(node.value, self.local_classes, self.factory_returns)
+            if node.value
+            else None
+        )
         self._record(node.target, class_id)
         if node.value:
             self.visit(node.value)
@@ -988,6 +1099,32 @@ class _ClassAliasReferenceVisitor(_FunctionAliasVisitor):
         return self.known_classes.get(call_name)
 
 
+class _ReturnClassVisitor(ast.NodeVisitor):
+    def __init__(self, known_classes: dict[str, str]) -> None:
+        self.known_classes = known_classes
+        self.class_ids: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is None:
+            self.class_ids.add("")
+            return
+        class_id = _class_instantiation_target(node.value, self.known_classes)
+        self.class_ids.add(class_id or "")
+        self.generic_visit(node.value)
+
+
 class _ScopeCallVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.calls: list[ast.Call] = []
@@ -1041,13 +1178,17 @@ def _assignment_target_values(target: ast.AST, value: ast.AST) -> list[tuple[ast
     return [(target, value)]
 
 
-def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) -> str | None:
+def _class_instantiation_target(
+    node: ast.AST,
+    local_classes: dict[str, str],
+    factory_returns: dict[str, str] | None = None,
+) -> str | None:
     if not isinstance(node, ast.Call):
         return None
     call_name = _call_name(node.func)
     if not call_name:
         return None
-    return local_classes.get(call_name)
+    return local_classes.get(call_name) or (factory_returns or {}).get(call_name)
 
 
 def _is_super_call(node: ast.AST) -> bool:

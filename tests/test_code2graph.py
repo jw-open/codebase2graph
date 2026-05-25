@@ -2633,6 +2633,79 @@ def qualified():
     )
 
 
+def test_python_factory_return_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+def build_service() -> Service:
+    return Service()
+
+module_worker = build_service()
+
+def main():
+    worker = build_service()
+    worker.helper()
+    module_worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:worker.helper", "py:call:module_worker.helper"} for node in graph["nodes"])
+
+
+def test_python_imported_factory_return_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+def build_service():
+    return Service()
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import service
+from service import build_service
+
+def direct():
+    worker = build_service()
+    return worker.helper()
+
+def qualified():
+    worker = service.build_service()
+    return worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:direct"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:qualified"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
+
+
 def test_python_reassigned_module_instance_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
