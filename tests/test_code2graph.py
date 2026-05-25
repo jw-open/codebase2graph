@@ -168,6 +168,51 @@ export function main() {
     assert not any(node["id"] == "js:call:execute" for node in graph["nodes"])
 
 
+def test_typescript_anonymous_default_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "arrow.ts").write_text(
+        """
+export default () => {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "function.ts").write_text(
+        """
+export default function () {
+  return 2;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import runArrow from "./arrow";
+import runFunction from "./function";
+
+export function main() {
+  runArrow();
+  runFunction();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:arrow.ts:default" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:function.ts:default" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:arrow.ts:default"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:function.ts:default"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:runArrow", "js:call:runFunction"} for node in graph["nodes"])
+
+
 def test_typescript_reexported_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """

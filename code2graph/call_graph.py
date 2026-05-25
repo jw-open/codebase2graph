@@ -9,6 +9,8 @@ from .scanner import iter_files, rel_id, read_text
 
 JS_FUNC_RE = re.compile(
     r"^\s*(?:(?:export\s+default\s+)|(?:export\s+))?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
+    r"|^\s*export\s+default\s+(?:async\s+)?function\s*\("
+    r"|^\s*export\s+default\s+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
@@ -76,7 +78,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         matches = [
             match
             for match in JS_FUNC_RE.finditer(text)
-            if (next((group for group in match.groups() if group), None) not in JS_KEYWORDS)
+            if (_javascript_function_name(match) not in JS_KEYWORDS)
         ]
         files.append((path, rel, text, matches))
         for module_key in _javascript_module_keys(root, path):
@@ -103,7 +105,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             module_index,
         )
         for index, match in enumerate(matches):
-            name = next((group for group in match.groups() if group), None)
+            name = _javascript_function_name(match)
             if not name or name in JS_KEYWORDS:
                 continue
             start = match.start()
@@ -147,10 +149,19 @@ def _build_javascript_call_graph(root: Path) -> Graph:
 def _local_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:
     counts: dict[str, int] = {}
     for match in matches:
-        name = next((group for group in match.groups() if group), None)
+        name = _javascript_function_name(match)
         if name and name not in JS_KEYWORDS:
             counts[name] = counts.get(name, 0) + 1
     return {name: f"js:function:{rel}:{name}" for name, count in counts.items() if count == 1}
+
+
+def _javascript_function_name(match: re.Match[str]) -> str | None:
+    name = next((group for group in match.groups() if group), None)
+    if name:
+        return name
+    if re.match(r"^\s*export\s+default\b", match.group(0)):
+        return "default"
+    return None
 
 
 def _local_javascript_member_call_target(call: str, local_functions: dict[str, str]) -> str | None:
@@ -232,7 +243,7 @@ def _javascript_parameter_names(body: str) -> set[str]:
 def _default_javascript_function_ids(rel: str, matches: list[re.Match[str]]) -> dict[str, str]:
     defaults: dict[str, str] = {}
     for match in matches:
-        name = next((group for group in match.groups() if group), None)
+        name = _javascript_function_name(match)
         if name and name not in JS_KEYWORDS and _is_default_javascript_export(match):
             defaults[name] = f"js:function:{rel}:{name}"
     return defaults
