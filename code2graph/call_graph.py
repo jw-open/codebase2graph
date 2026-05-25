@@ -26,6 +26,7 @@ JS_REEXPORT_RE = re.compile(
     r"^\s*export\s+(?P<clause>\{[^}]+\}|\*)\s+from\s+['\"](?P<module>[^'\"]+)['\"]",
     re.M,
 )
+JS_LOCAL_EXPORT_RE = re.compile(r"^\s*export\s+(?P<clause>\{[^}]+\})\s*;?\s*$", re.M)
 JS_ALIAS_DECL_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
@@ -315,6 +316,52 @@ def _add_reexported_javascript_function_ids(
                         if function_id not in targets:
                             targets.add(function_id)
                             changed = True
+            local_exports = _local_exported_javascript_functions(
+                root,
+                path,
+                text,
+                function_index,
+                default_function_index,
+                module_index,
+            )
+            for exported_name, function_id in local_exports.items():
+                for module_key in current_module_keys:
+                    targets = function_index.setdefault((module_key, exported_name), set())
+                    if function_id not in targets:
+                        targets.add(function_id)
+                        changed = True
+
+
+def _local_exported_javascript_functions(
+    root: Path,
+    path: Path,
+    text: str,
+    function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
+    module_index: dict[str, set[Path]],
+) -> dict[str, str]:
+    matches = [
+        match
+        for match in JS_FUNC_RE.finditer(text)
+        if (_javascript_function_name(match) not in JS_KEYWORDS)
+    ]
+    known_functions = {
+        **_local_javascript_function_ids(path.relative_to(root).as_posix(), matches),
+        **_imported_javascript_function_ids(root, path, text, function_index, default_function_index, module_index),
+    }
+    exported: dict[str, str] = {}
+    for match in JS_LOCAL_EXPORT_RE.finditer(text):
+        for item in match.group("clause").strip("{}").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            parts = re.split(r"\s+as\s+", item, maxsplit=1)
+            local_name = parts[0].strip()
+            exported_name = parts[1].strip() if len(parts) == 2 else local_name
+            target_id = known_functions.get(local_name)
+            if target_id:
+                exported[exported_name] = target_id
+    return exported
 
 
 def _named_reexported_javascript_functions(
