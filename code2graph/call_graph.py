@@ -63,7 +63,10 @@ JS_DESTRUCTURING_ALIAS_DECL_RE = re.compile(
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n]|$)",
     re.M,
 )
-JS_CLASS_RE = re.compile(r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)[^{]*\{")
+JS_CLASS_RE = re.compile(
+    r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)"
+    r"(?:\s+extends\s+(?P<base>[A-Za-z_$][\w$]*))?[^{]*\{"
+)
 JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
     r"(?P<class>[A-Za-z_$][\w$]*)\s*\(",
@@ -148,6 +151,11 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         )
         class_methods = _local_javascript_class_methods(rel, text, local_functions)
         known_classes = {class_name for class_name, _method_name in class_methods}
+        class_bases = _local_javascript_class_bases(text, known_classes)
+        method_owners = {
+            function_id: class_name
+            for (class_name, _method_name), function_id in class_methods.items()
+        }
         object_method_targets = _local_javascript_object_method_targets(text, local_functions)
         for index, match in enumerate(matches):
             name = _javascript_function_name(match)
@@ -157,6 +165,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
             body = text[start:end]
             func_id = f"js:function:{rel}:{name}"
+            enclosing_class_name = method_owners.get(func_id)
             function_aliases, shadowed_functions = _javascript_function_aliases(
                 body,
                 {**local_functions, **imported_functions, **object_method_targets},
@@ -186,6 +195,12 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                     target_id = (
                         local_functions.get(call)
                         or _local_javascript_member_call_target(call, local_functions)
+                        or _javascript_super_method_call_target(
+                            call,
+                            enclosing_class_name,
+                            class_bases,
+                            class_methods,
+                        )
                         or _javascript_instance_method_call_target(call, instance_aliases, class_methods)
                         or _javascript_class_method_call_target(call, known_classes, class_methods)
                         or object_method_targets.get(call)
@@ -247,6 +262,28 @@ def _local_javascript_class_methods(
         if function_id and class_counts.get(class_name) == 1:
             methods[(class_name, method_name)] = function_id
     return methods
+
+
+def _local_javascript_class_bases(text: str, known_classes: set[str]) -> dict[str, str]:
+    class_counts: dict[str, int] = {}
+    discovered: list[tuple[str, str]] = []
+    for class_match in JS_CLASS_RE.finditer(text):
+        class_name = class_match.group("name")
+        class_counts[class_name] = class_counts.get(class_name, 0) + 1
+        base_name = class_match.group("base")
+        if base_name:
+            discovered.append((class_name, base_name))
+
+    bases: dict[str, str] = {}
+    for class_name, base_name in discovered:
+        if (
+            class_name in known_classes
+            and base_name in known_classes
+            and class_counts.get(class_name) == 1
+            and class_counts.get(base_name) == 1
+        ):
+            bases[class_name] = base_name
+    return bases
 
 
 def _local_javascript_object_method_targets(text: str, local_functions: dict[str, str]) -> dict[str, str]:
@@ -322,6 +359,29 @@ def _javascript_class_method_call_target(
     if not method_name or class_name not in known_classes:
         return None
     return class_methods.get((class_name, method_name))
+
+
+def _javascript_super_method_call_target(
+    call: str,
+    enclosing_class_name: str | None,
+    class_bases: dict[str, str],
+    class_methods: dict[tuple[str, str], str],
+) -> str | None:
+    receiver, _, method_name = call.partition(".")
+    if receiver != "super" or not method_name or "." in method_name or not enclosing_class_name:
+        return None
+    visited: set[str] = set()
+    class_name = enclosing_class_name
+    while class_name not in visited:
+        visited.add(class_name)
+        base_name = class_bases.get(class_name)
+        if not base_name:
+            return None
+        target_id = class_methods.get((base_name, method_name))
+        if target_id:
+            return target_id
+        class_name = base_name
+    return None
 
 
 def _javascript_function_aliases(body: str, known_functions: dict[str, str]) -> tuple[dict[str, str], set[str]]:
