@@ -130,6 +130,44 @@ export function main() {
     assert not any(node["id"] in {"js:call:renamed", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_typescript_dynamic_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function direct() {
+  return 1;
+}
+
+export function qualified() {
+  return 2;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+export async function main() {
+  const { direct: renamed } = await import("./helpers");
+  const helpers = await import("./helpers");
+  renamed();
+  helpers.qualified();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:renamed", "js:call:helpers.qualified"} for node in graph["nodes"])
+
+
 def test_typescript_destructured_namespace_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """

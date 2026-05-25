@@ -29,6 +29,11 @@ JS_REQUIRE_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*require\(['\"](?P<module>[^'\"]+)['\"]\)",
     re.M,
 )
+JS_DYNAMIC_IMPORT_RE = re.compile(
+    r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?:await\s+)?import\(\s*['\"](?P<module>[^'\"]+)['\"]\s*\)",
+    re.M,
+)
 JS_REEXPORT_RE = re.compile(
     r"^\s*export\s+(?P<clause>\{[^}]+\}|\*)\s+from\s+['\"](?P<module>[^'\"]+)['\"]",
     re.M,
@@ -531,6 +536,16 @@ def _imported_javascript_function_ids(
             _add_named_javascript_imports(imported, function_index, module_keys, binding)
         else:
             _add_bound_default_javascript_import(imported, default_function_index, module_keys, binding)
+            _add_module_javascript_imports(imported, function_index, module_keys, binding)
+
+    for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        if binding.startswith("{"):
+            _add_named_javascript_imports(imported, function_index, module_keys, binding)
+        else:
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
 
