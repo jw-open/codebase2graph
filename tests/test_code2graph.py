@@ -2026,6 +2026,45 @@ fn main() {
     )
 
 
+def test_rust_call_graph_resolves_qualified_constructor_instance_methods(tmp_path: Path) -> None:
+    (tmp_path / "helpers.rs").write_text(
+        """
+pub struct Service;
+
+impl Service {
+    pub fn new() -> Service {
+        Service
+    }
+
+    pub fn run(&self) -> i32 {
+        1
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.rs").write_text(
+        """
+mod helpers;
+
+fn main() {
+    let service = helpers::Service::new();
+    service.run();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:method:helpers.rs:Service.run"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "rust:call:service.run" for node in graph["nodes"])
+
+
 def test_rust_entity_graph_defines_types_functions_and_methods(tmp_path: Path) -> None:
     (tmp_path / "lib.rs").write_text(
         """

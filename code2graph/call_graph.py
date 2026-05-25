@@ -2240,7 +2240,7 @@ RUST_CALL_RE = re.compile(
 RUST_USE_RE = re.compile(r"^\s*use\s+(?P<path>[^;]+);", re.M)
 RUST_INSTANCE_RE = re.compile(
     r"\blet\s+(?:mut\s+)?(?P<name>[A-Za-z_]\w*)\s*(?::\s*[A-Za-z_]\w*)?\s*=\s*"
-    r"(?P<type>[A-Za-z_]\w*)\s*(?:::|\{)",
+    r"(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*(?:::|\{)",
     re.M,
 )
 RUST_KEYWORDS = {
@@ -2481,7 +2481,7 @@ def _rust_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
     assignments: dict[str, set[str | None]] = {}
     for match in RUST_INSTANCE_RE.finditer(body):
         name = match.group("name")
-        type_name = match.group("type")
+        type_name = _rust_constructed_type_name(match.group("type"))
         assignments.setdefault(name, set()).add(type_name if type_name in known_types else None)
     aliases: dict[str, str] = {}
     for name, type_names in assignments.items():
@@ -2490,6 +2490,15 @@ def _rust_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
             if type_name:
                 aliases[name] = type_name
     return aliases
+
+
+def _rust_constructed_type_name(type_path: str) -> str:
+    parts = [part for part in type_path.split("::") if part]
+    if not parts:
+        return type_path
+    if len(parts) > 1 and parts[-1][:1].islower():
+        return parts[-2]
+    return parts[-1]
 
 
 def _rust_method_call_target(
