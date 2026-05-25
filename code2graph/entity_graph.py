@@ -241,7 +241,12 @@ def _add_python_imports(
                 if target_id:
                     graph.add_edge(file_id, target_id, "imports")
         elif isinstance(node, ast.ImportFrom):
-            module = _resolve_python_import_from(current_module, node.level, node.module)
+            module = _resolve_python_import_from(
+                current_module,
+                node.level,
+                node.module,
+                current_is_package=path.name == "__init__.py",
+            )
             if not module:
                 continue
             _add_import(graph, file_id, "python", module)
@@ -566,10 +571,16 @@ def _python_module_name(root: Path, path: Path) -> str:
     return ".".join(parts)
 
 
-def _resolve_python_import_from(current_module: str, level: int, module: str | None) -> str:
+def _resolve_python_import_from(
+    current_module: str,
+    level: int,
+    module: str | None,
+    *,
+    current_is_package: bool = False,
+) -> str:
     if level == 0:
         return module or ""
-    package_parts = current_module.split(".")[:-1]
+    package_parts = current_module.split(".") if current_is_package else current_module.split(".")[:-1]
     if level > 1:
         package_parts = package_parts[: -(level - 1)]
     module_parts = [part for part in (module or "").split(".") if part]

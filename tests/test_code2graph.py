@@ -2714,7 +2714,7 @@ def outer():
 def test_python_entity_imports_resolve_to_local_files(tmp_path: Path) -> None:
     package = tmp_path / "pkg"
     package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("from .service import run\n", encoding="utf-8")
     (package / "worker.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     (package / "service.py").write_text("from . import worker\n", encoding="utf-8")
     (tmp_path / "helpers.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
@@ -2730,6 +2730,7 @@ from pkg import service
 
     assert any(edge["from"] == "file:app.py" and edge["to"] == "file:helpers.py" for edge in graph["edges"])
     assert any(edge["from"] == "file:app.py" and edge["to"] == "file:pkg/service.py" for edge in graph["edges"])
+    assert any(edge["from"] == "file:pkg/__init__.py" and edge["to"] == "file:pkg/service.py" for edge in graph["edges"])
     assert any(edge["from"] == "file:pkg/service.py" and edge["to"] == "file:pkg/worker.py" for edge in graph["edges"])
     assert any(node["id"] == "import:python:helpers" for node in graph["nodes"])
 
