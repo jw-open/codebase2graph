@@ -1075,7 +1075,11 @@ JAVA_TYPE_RE = re.compile(
     re.M,
 )
 JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
-JAVA_IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
+JAVA_IMPORT_RE = re.compile(r"^\s*import\s+(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
+JAVA_STATIC_IMPORT_RE = re.compile(
+    r"^\s*import\s+static\s+(?P<class>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(?P<member>[A-Za-z_]\w*|\*)\s*;",
+    re.M,
+)
 JAVA_METHOD_RE = re.compile(
     r"^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp|default)\s+)*"
     r"(?:(?:<[^>{;]+>\s*)?(?P<return>[A-Za-z_]\w*(?:[<>\[\].?,\s]+[A-Za-z_]\w*)*)\s+)?"
@@ -1148,6 +1152,7 @@ def _build_java_call_graph(root: Path) -> Graph:
         )
         graph.add_edge(file_id, method.id, "defines")
         known_classes = _java_known_class_refs(text, file_packages[method.path], class_refs)
+        static_imported_methods = _java_static_imported_methods(text, class_methods, class_refs)
         instance_aliases = _java_instance_aliases(body, known_classes)
         for call_match in JAVA_CALL_RE.finditer(body):
             call = call_match.group(1)
@@ -1163,6 +1168,7 @@ def _build_java_call_graph(root: Path) -> Graph:
                 class_methods,
                 instance_aliases,
                 known_classes,
+                static_imported_methods,
             )
             if not target_id:
                 target_id = f"java:call:{call}"
@@ -1223,6 +1229,28 @@ def _java_known_class_refs(
     return known
 
 
+def _java_static_imported_methods(
+    text: str,
+    class_methods: dict[tuple[str, str, str], set[str]],
+    class_refs: dict[tuple[str, str], set[tuple[str, str]]],
+) -> dict[str, str]:
+    imported: dict[str, set[str]] = {}
+    for match in JAVA_STATIC_IMPORT_RE.finditer(text):
+        package, _, class_name = match.group("class").rpartition(".")
+        refs = class_refs.get((package, class_name), set())
+        if len(refs) != 1:
+            continue
+        class_ref = next(iter(refs))
+        member = match.group("member")
+        for (method_package, method_class, method_name), method_ids in class_methods.items():
+            if (method_package, method_class) != class_ref:
+                continue
+            if member != "*" and method_name != member:
+                continue
+            imported.setdefault(method_name, set()).update(method_ids)
+    return {name: next(iter(method_ids)) for name, method_ids in imported.items() if len(method_ids) == 1}
+
+
 def _java_instance_aliases(
     body: str,
     known_classes: dict[str, tuple[str, str]],
@@ -1247,10 +1275,14 @@ def _java_method_call_target(
     class_methods: dict[tuple[str, str, str], set[str]],
     instance_aliases: dict[str, tuple[str, str]],
     known_classes: dict[str, tuple[str, str]],
+    static_imported_methods: dict[str, str],
 ) -> str | None:
     receiver, separator, method_name = call.partition(".")
     if not separator:
         method_ids = class_methods.get((*current_class, receiver), set())
+        if len(method_ids) == 1:
+            return next(iter(method_ids))
+        return static_imported_methods.get(receiver)
     else:
         target_class = current_class if receiver == "this" else instance_aliases.get(receiver) or known_classes.get(receiver)
         method_ids = class_methods.get((*target_class, method_name), set()) if target_class else set()

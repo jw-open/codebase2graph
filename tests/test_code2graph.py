@@ -954,6 +954,55 @@ class App {
     assert not any(node["id"] in {"java:call:service.helper", "java:call:Service.helper"} for node in graph["nodes"])
 
 
+def test_java_call_graph_resolves_static_imported_methods(tmp_path: Path) -> None:
+    package_a = tmp_path / "a"
+    package_a.mkdir()
+    (package_a / "Util.java").write_text(
+        """
+package a;
+
+public class Util {
+    static int direct() {
+        return 1;
+    }
+
+    static int wildcard() {
+        return 2;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+import static a.Util.direct;
+import static a.Util.*;
+
+class App {
+    void main() {
+        direct();
+        wildcard();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:a/Util.java:Util.direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:a/Util.java:Util.wildcard"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"java:call:direct", "java:call:wildcard"} for node in graph["nodes"])
+
+
 def test_rust_call_graph_resolves_functions_and_impl_methods(tmp_path: Path) -> None:
     (tmp_path / "main.rs").write_text(
         """
