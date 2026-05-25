@@ -411,6 +411,56 @@ def main():
     )
 
 
+def test_python_package_reexported_calls_resolve_to_source_modules(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        """
+from .service import Service, run
+""",
+        encoding="utf-8",
+    )
+    (package / "service.py").write_text(
+        """
+def run():
+    return 1
+
+class Service:
+    def helper(self):
+        return run()
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from pkg import Service, run
+
+def main():
+    worker = Service()
+    run()
+    worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:function:pkg/service.py:run"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:pkg/service.py:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] == "py:method:pkg/service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:run", "py:call:Service", "py:call:worker.helper"} for node in graph["nodes"])
+
+
 def test_python_star_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """

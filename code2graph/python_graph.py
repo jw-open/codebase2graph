@@ -37,6 +37,7 @@ class PythonCollector(ast.NodeVisitor):
         self.function_index = function_index
         self.class_index = class_index
         self.current_module = _module_name(root, path)
+        self.current_module_is_package = path.name == "__init__.py"
         self.scope: list[str] = []
         self.lexical_function_scopes: list[dict[str, str]] = []
 
@@ -93,11 +94,13 @@ class PythonCollector(ast.NodeVisitor):
             node.body,
             self.current_module,
             self.function_index,
+            current_is_package=self.current_module_is_package,
         )
         scoped_imported_classes = _imported_class_ids_from_body(
             node.body,
             self.current_module,
             self.class_index,
+            current_is_package=self.current_module_is_package,
         )
         known_classes = {
             **self.imported_classes,
@@ -273,6 +276,7 @@ def _project_function_index(root: Path, modules: list[tuple[Path, ast.Module]]) 
         module = _module_name(root, path)
         for name, function_id in _local_function_ids(root, path, tree).items():
             function_index[(module, name)] = function_id
+    _add_reexported_function_ids(root, modules, function_index)
     return function_index
 
 
@@ -282,7 +286,70 @@ def _project_class_index(root: Path, modules: list[tuple[Path, ast.Module]]) -> 
         module = _module_name(root, path)
         for name, class_id in _local_class_ids(root, path, tree).items():
             class_index[(module, name)] = class_id
+    _add_reexported_class_ids(root, modules, class_index)
     return class_index
+
+
+def _add_reexported_function_ids(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    function_index: dict[tuple[str, str], str],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for path, tree in modules:
+            module = _module_name(root, path)
+            for name, function_id in _reexported_function_ids(root, path, tree, function_index).items():
+                key = (module, name)
+                if key not in function_index:
+                    function_index[key] = function_id
+                    changed = True
+
+
+def _add_reexported_class_ids(
+    root: Path,
+    modules: list[tuple[Path, ast.Module]],
+    class_index: dict[tuple[str, str], str],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for path, tree in modules:
+            module = _module_name(root, path)
+            for name, class_id in _reexported_class_ids(root, path, tree, class_index).items():
+                key = (module, name)
+                if key not in class_index:
+                    class_index[key] = class_id
+                    changed = True
+
+
+def _reexported_function_ids(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    function_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
+    return _imported_function_ids_from_body(
+        [node for node in tree.body if isinstance(node, ast.ImportFrom)],
+        _module_name(root, path),
+        function_index,
+        current_is_package=path.name == "__init__.py",
+    )
+
+
+def _reexported_class_ids(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    class_index: dict[tuple[str, str], str],
+) -> dict[str, str]:
+    return _imported_class_ids_from_body(
+        [node for node in tree.body if isinstance(node, ast.ImportFrom)],
+        _module_name(root, path),
+        class_index,
+        current_is_package=path.name == "__init__.py",
+    )
 
 
 def _project_method_index(
@@ -358,13 +425,20 @@ def _imported_function_ids(
     tree: ast.Module,
     function_index: dict[tuple[str, str], str],
 ) -> dict[str, str]:
-    return _imported_function_ids_from_body(tree.body, _module_name(root, path), function_index)
+    return _imported_function_ids_from_body(
+        tree.body,
+        _module_name(root, path),
+        function_index,
+        current_is_package=path.name == "__init__.py",
+    )
 
 
 def _imported_function_ids_from_body(
     body: list[ast.stmt],
     current_module: str,
     function_index: dict[tuple[str, str], str],
+    *,
+    current_is_package: bool = False,
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
     for node in body:
@@ -374,7 +448,12 @@ def _imported_function_ids_from_body(
                 local_name = alias.asname or module
                 _add_module_function_aliases(imported, function_index, local_name, module)
         elif isinstance(node, ast.ImportFrom):
-            module = _resolve_import_from_module(current_module, node.level, node.module)
+            module = _resolve_import_from_module(
+                current_module,
+                node.level,
+                node.module,
+                current_is_package=current_is_package,
+            )
             if not module:
                 continue
             for alias in node.names:
@@ -395,13 +474,20 @@ def _imported_class_ids(
     tree: ast.Module,
     class_index: dict[tuple[str, str], str],
 ) -> dict[str, str]:
-    return _imported_class_ids_from_body(tree.body, _module_name(root, path), class_index)
+    return _imported_class_ids_from_body(
+        tree.body,
+        _module_name(root, path),
+        class_index,
+        current_is_package=path.name == "__init__.py",
+    )
 
 
 def _imported_class_ids_from_body(
     body: list[ast.stmt],
     current_module: str,
     class_index: dict[tuple[str, str], str],
+    *,
+    current_is_package: bool = False,
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
     for node in body:
@@ -411,7 +497,12 @@ def _imported_class_ids_from_body(
                 local_name = alias.asname or module
                 _add_module_class_aliases(imported, class_index, local_name, module)
         elif isinstance(node, ast.ImportFrom):
-            module = _resolve_import_from_module(current_module, node.level, node.module)
+            module = _resolve_import_from_module(
+                current_module,
+                node.level,
+                node.module,
+                current_is_package=current_is_package,
+            )
             if not module:
                 continue
             for alias in node.names:
@@ -786,10 +877,16 @@ def _module_name(root: Path, path: Path) -> str:
     return ".".join(parts)
 
 
-def _resolve_import_from_module(current_module: str, level: int, module: str | None) -> str:
+def _resolve_import_from_module(
+    current_module: str,
+    level: int,
+    module: str | None,
+    *,
+    current_is_package: bool = False,
+) -> str:
     if level == 0:
         return module or ""
-    package_parts = current_module.split(".")[:-1]
+    package_parts = current_module.split(".") if current_is_package else current_module.split(".")[:-1]
     if level > 1:
         package_parts = package_parts[: -(level - 1)]
     module_parts = [part for part in (module or "").split(".") if part]
