@@ -33,6 +33,19 @@ GO_IMPORT_RE = re.compile(
     re.M | re.S,
 )
 GO_IMPORT_ITEM_RE = re.compile(r"^\s*(?:\.|_|[A-Za-z_]\w*)?\s*\"(?P<path>[^\"]+)\"", re.M)
+RUST_TYPE_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+(?P<name>[A-Za-z_]\w*)\b",
+    re.M,
+)
+RUST_FN_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*(?:<[^>{;]*>\s*)?\(",
+    re.M,
+)
+RUST_IMPL_RE = re.compile(
+    r"^\s*impl(?:\s*<[^>{;]*>)?\s+(?P<type>[A-Za-z_]\w*)[^{;]*\{",
+    re.M,
+)
 
 
 def build_entity_graph(root: Path) -> Graph:
@@ -57,6 +70,9 @@ def build_entity_graph(root: Path) -> Graph:
         elif path.suffix == ".go":
             _add_go_entities(graph, root, path, text, file_id)
             _add_go_imports(graph, file_id, text, go_modules, _go_module_name(root))
+        elif path.suffix == ".rs":
+            _add_rust_entities(graph, root, path, text, file_id)
+            _add_imports(graph, text, file_id, language)
         elif path.suffix == ".py":
             _add_python_imports(graph, root, path, text, file_id, python_modules)
         elif path.suffix not in JAVASCRIPT_EXTENSIONS:
@@ -101,6 +117,43 @@ def _add_go_entities(graph: Graph, root: Path, path: Path, text: str, file_id: s
             continue
         graph.add_node(entity_id, label, attributes={"kind": kind, "language": "go", "path": rel})
         graph.add_edge(file_id, entity_id, "defines")
+
+
+def _add_rust_entities(graph: Graph, root: Path, path: Path, text: str, file_id: str) -> None:
+    rel = path.relative_to(root).as_posix()
+    impl_ranges: list[tuple[int, int]] = []
+    for match in RUST_TYPE_RE.finditer(text):
+        name = match.group("name")
+        entity_id = f"rust:entity:{rel}:{name}"
+        graph.add_node(entity_id, name, attributes={"kind": "entity", "language": "rust", "path": rel})
+        graph.add_edge(file_id, entity_id, "defines")
+
+    for impl_match in RUST_IMPL_RE.finditer(text):
+        body_start = impl_match.end() - 1
+        body = _braced_block(text, body_start)
+        if body is None:
+            continue
+        start = body_start + 1
+        end = body_start + len(body) + 2
+        impl_ranges.append((start, end))
+        owner = impl_match.group("type")
+        for fn_match in RUST_FN_RE.finditer(body):
+            if not _rust_function_has_body(text, start + fn_match.end()):
+                continue
+            name = fn_match.group("name")
+            method_id = f"rust:method:{rel}:{owner}.{name}"
+            graph.add_node(method_id, f"{owner}.{name}", attributes={"kind": "method", "language": "rust", "path": rel})
+            graph.add_edge(file_id, method_id, "defines")
+
+    for fn_match in RUST_FN_RE.finditer(text):
+        if any(start <= fn_match.start() < end for start, end in impl_ranges):
+            continue
+        if not _rust_function_has_body(text, fn_match.end()):
+            continue
+        name = fn_match.group("name")
+        function_id = f"rust:function:{rel}:{name}"
+        graph.add_node(function_id, name, attributes={"kind": "function", "language": "rust", "path": rel})
+        graph.add_edge(file_id, function_id, "defines")
 
 
 def _add_imports(graph: Graph, text: str, file_id: str, language: str) -> None:
@@ -278,6 +331,25 @@ def _go_receiver_type(receiver: str | None) -> str | None:
     parts = receiver.strip().split()
     type_name = parts[-1] if parts else ""
     return type_name.strip("*[]")
+
+
+def _braced_block(text: str, open_brace_index: int) -> str | None:
+    depth = 0
+    for index in range(open_brace_index, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace_index + 1 : index]
+    return None
+
+
+def _rust_function_has_body(text: str, search_start: int) -> bool:
+    semicolon_index = text.find(";", search_start)
+    body_start = text.find("{", search_start)
+    return body_start >= 0 and not (semicolon_index >= 0 and semicolon_index < body_start)
 
 
 def _python_module_index(root: Path) -> dict[str, str]:

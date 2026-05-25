@@ -74,6 +74,7 @@ def build_call_graph(root: Path) -> Graph:
     graph.merge(_build_javascript_call_graph(root))
     graph.merge(_build_go_call_graph(root))
     graph.merge(_build_java_call_graph(root))
+    graph.merge(_build_rust_call_graph(root))
     if graph.nodes:
         graph.add_node("call-root", "Call Graph", attributes={"kind": "call_graph"})
         for node_id, node in list(graph.nodes.items()):
@@ -979,6 +980,32 @@ class JavaMethod:
         return f"{self.class_name}.{self.name}"
 
 
+@dataclass(frozen=True)
+class RustCallable:
+    path: Path
+    rel: str
+    name: str
+    start: int
+    end: int
+    owner: str | None = None
+
+    @property
+    def id(self) -> str:
+        if self.owner:
+            return f"rust:method:{self.rel}:{self.owner}.{self.name}"
+        return f"rust:function:{self.rel}:{self.name}"
+
+    @property
+    def label(self) -> str:
+        if self.owner:
+            return f"{self.owner}.{self.name}"
+        return self.name
+
+    @property
+    def kind(self) -> str:
+        return "method" if self.owner else "function"
+
+
 JAVA_TYPE_RE = re.compile(
     r"^\s*(?:(?:public|protected|private|abstract|final|static)\s+)*"
     r"(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_]\w*)[^{]*\{",
@@ -1122,3 +1149,196 @@ def _java_method_call_target(
     if len(method_ids) == 1:
         return next(iter(method_ids))
     return None
+
+
+RUST_FN_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*(?:<[^>{;]*>\s*)?\(",
+    re.M,
+)
+RUST_IMPL_RE = re.compile(
+    r"^\s*impl(?:\s*<[^>{;]*>)?\s+(?P<type>[A-Za-z_]\w*)[^{;]*\{",
+    re.M,
+)
+RUST_CALL_RE = re.compile(
+    r"\b([A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)?)\s*(?:::<[^>{}]+>)?\("
+)
+RUST_INSTANCE_RE = re.compile(
+    r"\blet\s+(?:mut\s+)?(?P<name>[A-Za-z_]\w*)\s*(?::\s*[A-Za-z_]\w*)?\s*=\s*"
+    r"(?P<type>[A-Za-z_]\w*)\s*(?:::|\{)",
+    re.M,
+)
+RUST_KEYWORDS = {
+    "async",
+    "for",
+    "fn",
+    "if",
+    "impl",
+    "let",
+    "loop",
+    "macro_rules",
+    "match",
+    "move",
+    "return",
+    "struct",
+    "trait",
+    "unsafe",
+    "while",
+}
+
+
+def _build_rust_call_graph(root: Path) -> Graph:
+    graph = Graph()
+    files: dict[Path, str] = {}
+    callables: list[RustCallable] = []
+    file_functions: dict[tuple[str, str], set[str]] = {}
+    methods: dict[tuple[str, str], set[str]] = {}
+
+    for path in iter_files(root):
+        if path.suffix != ".rs":
+            continue
+        rel = path.relative_to(root).as_posix()
+        text = read_text(path)
+        files[path] = text
+        for callable_item in _rust_callables(path, rel, text):
+            callables.append(callable_item)
+            if callable_item.owner:
+                methods.setdefault((callable_item.owner, callable_item.name), set()).add(callable_item.id)
+            else:
+                file_functions.setdefault((rel, callable_item.name), set()).add(callable_item.id)
+
+    known_types = {type_name for type_name, _method_name in methods}
+    for path, text in files.items():
+        rel = path.relative_to(root).as_posix()
+        file_id = rel_id("file", root, path)
+        graph.add_node(file_id, path.name, attributes={"kind": "file", "language": "rust", "path": rel})
+
+    for callable_item in callables:
+        text = files[callable_item.path]
+        body = text[callable_item.start : callable_item.end]
+        file_id = rel_id("file", root, callable_item.path)
+        local_functions = _rust_local_functions(file_functions, callable_item.rel)
+        instance_aliases = _rust_instance_aliases(body, known_types)
+        graph.add_node(
+            callable_item.id,
+            callable_item.label,
+            attributes={
+                "kind": callable_item.kind,
+                "language": "rust",
+                "path": callable_item.rel,
+                "line": str(text.count("\n", 0, callable_item.start) + 1),
+            },
+        )
+        graph.add_edge(file_id, callable_item.id, "defines")
+        for call_match in RUST_CALL_RE.finditer(body):
+            call = call_match.group(1)
+            base = re.split(r"::|\.", call, maxsplit=1)[0]
+            if base in RUST_KEYWORDS:
+                continue
+            if _rust_call_is_definition_name(body, call_match):
+                continue
+            target_id = (
+                local_functions.get(call)
+                or _rust_method_call_target(call, callable_item.owner, methods, instance_aliases)
+            )
+            if target_id == callable_item.id or (not target_id and call == callable_item.name):
+                continue
+            if not target_id:
+                target_id = f"rust:call:{call}"
+                graph.add_node(target_id, call, attributes={"kind": "call_target", "language": "rust"})
+            graph.add_edge(callable_item.id, target_id, "calls")
+
+    return graph
+
+
+def _rust_callables(path: Path, rel: str, text: str) -> list[RustCallable]:
+    impl_ranges: list[tuple[int, int, str]] = []
+    callables: list[RustCallable] = []
+    for impl_match in RUST_IMPL_RE.finditer(text):
+        body_start = impl_match.end() - 1
+        body = _javascript_braced_block(text, body_start)
+        if body is None:
+            continue
+        start = body_start + 1
+        end = body_start + len(body) + 2
+        owner = impl_match.group("type")
+        impl_ranges.append((start, end, owner))
+        for fn_match in RUST_FN_RE.finditer(body):
+            fn_start = start + fn_match.start()
+            fn_end = _rust_function_end(text, start + fn_match.end())
+            if fn_end is None:
+                continue
+            callables.append(RustCallable(path, rel, fn_match.group("name"), fn_start, fn_end, owner=owner))
+
+    for fn_match in RUST_FN_RE.finditer(text):
+        if any(start <= fn_match.start() < end for start, end, _owner in impl_ranges):
+            continue
+        fn_end = _rust_function_end(text, fn_match.end())
+        if fn_end is None:
+            continue
+        callables.append(RustCallable(path, rel, fn_match.group("name"), fn_match.start(), fn_end))
+    return callables
+
+
+def _rust_function_end(text: str, search_start: int) -> int | None:
+    semicolon_index = text.find(";", search_start)
+    body_start = text.find("{", search_start)
+    if body_start < 0 or (semicolon_index >= 0 and semicolon_index < body_start):
+        return None
+    body = _javascript_braced_block(text, body_start)
+    if body is None:
+        return None
+    return body_start + len(body) + 2
+
+
+def _rust_local_functions(
+    file_functions: dict[tuple[str, str], set[str]],
+    rel: str,
+) -> dict[str, str]:
+    local: dict[str, str] = {}
+    for (indexed_rel, name), function_ids in file_functions.items():
+        if indexed_rel == rel and len(function_ids) == 1:
+            local[name] = next(iter(function_ids))
+    return local
+
+
+def _rust_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
+    assignments: dict[str, set[str | None]] = {}
+    for match in RUST_INSTANCE_RE.finditer(body):
+        name = match.group("name")
+        type_name = match.group("type")
+        assignments.setdefault(name, set()).add(type_name if type_name in known_types else None)
+    aliases: dict[str, str] = {}
+    for name, type_names in assignments.items():
+        if len(type_names) == 1:
+            type_name = next(iter(type_names))
+            if type_name:
+                aliases[name] = type_name
+    return aliases
+
+
+def _rust_method_call_target(
+    call: str,
+    current_owner: str | None,
+    methods: dict[tuple[str, str], set[str]],
+    instance_aliases: dict[str, str],
+) -> str | None:
+    if "." in call:
+        receiver, method_name = call.split(".", 1)
+        owner = current_owner if receiver == "self" else instance_aliases.get(receiver)
+    elif "::" in call:
+        owner, method_name = call.split("::", 1)
+    else:
+        return None
+    if not owner:
+        return None
+    method_ids = methods.get((owner, method_name), set())
+    if len(method_ids) == 1:
+        return next(iter(method_ids))
+    return None
+
+
+def _rust_call_is_definition_name(body: str, call_match: re.Match[str]) -> bool:
+    line_start = body.rfind("\n", 0, call_match.start()) + 1
+    line_prefix = body[line_start : call_match.start()]
+    return bool(re.search(r"\bfn\s+$", line_prefix))

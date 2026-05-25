@@ -803,6 +803,93 @@ class App {
     assert not any(node["id"] in {"java:call:this.helper", "java:call:local", "java:call:service.helper"} for node in graph["nodes"])
 
 
+def test_rust_call_graph_resolves_functions_and_impl_methods(tmp_path: Path) -> None:
+    (tmp_path / "main.rs").write_text(
+        """
+fn helper() -> i32 {
+    1
+}
+
+struct Service;
+
+impl Service {
+    fn helper(&self) -> i32 {
+        helper()
+    }
+
+    fn run(&self) -> i32 {
+        self.helper()
+    }
+}
+
+fn main() {
+    helper();
+    let service = Service::new();
+    service.helper();
+    missing();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "rust:method:main.rs:Service.helper"
+        and edge["to"] == "rust:function:main.rs:helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:method:main.rs:Service.run"
+        and edge["to"] == "rust:method:main.rs:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:function:main.rs:helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main"
+        and edge["to"] == "rust:method:main.rs:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "rust:function:main.rs:main" and edge["to"] == "rust:call:missing"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"rust:call:helper", "rust:call:self.helper", "rust:call:service.helper"} for node in graph["nodes"])
+
+
+def test_rust_entity_graph_defines_types_functions_and_methods(tmp_path: Path) -> None:
+    (tmp_path / "lib.rs").write_text(
+        """
+pub struct Service;
+pub enum Mode { Fast }
+pub trait Runner {
+    fn run(&self);
+}
+
+pub fn build() -> Service {
+    Service
+}
+
+impl Service {
+    pub fn run(&self) {}
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(node["id"] == "rust:entity:lib.rs:Service" for node in graph["nodes"])
+    assert any(node["id"] == "rust:entity:lib.rs:Mode" for node in graph["nodes"])
+    assert any(node["id"] == "rust:entity:lib.rs:Runner" for node in graph["nodes"])
+    assert any(node["id"] == "rust:function:lib.rs:build" for node in graph["nodes"])
+    assert any(node["id"] == "rust:method:lib.rs:Service.run" for node in graph["nodes"])
+
+
 def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
