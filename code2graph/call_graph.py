@@ -9,20 +9,20 @@ from .python_graph import build_python_graph
 from .scanner import iter_files, rel_id, read_text
 
 JS_FUNC_RE = re.compile(
-    r"^\s*(?:(?:export\s+default\s+)|(?:export\s+))?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
-    r"|^\s*export\s+default\s+(?:async\s+)?function\s*\("
+    r"^\s*(?:(?:export\s+default\s+)|(?:export\s+))?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>{}\n;=]*>)?\s*\("
+    r"|^\s*export\s+default\s+(?:async\s+)?function(?:\s*<[^>{}\n;=]*>)?\s*\("
     r"|^\s*export\s+default\s+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
     r"|^\s*export\s+default\s+(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
-    r"|^\s*export\s+default\s+(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
-    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
-    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
+    r"|^\s*export\s+default\s+(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\("
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>{}\n;=]*>\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\("
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
-    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\("
     r"|^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
-    r"|^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
-    r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"
-    r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
-    r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
+    r"|^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\("
+    r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:<[^>{}\n;=]*>\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"
+    r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\("
+    r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*(?:<[^>{}\n;=]*>)?\s*\([^)]*\)\s*\{",
     re.M,
 )
 JS_CALL_RE = re.compile(
@@ -552,14 +552,20 @@ def _javascript_parameter_names(body: str) -> set[str]:
     params: str | None = None
     arrow_match = re.search(
         r"(?:=|\()\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)*"
-        r"(?:async\s*)?(?:\((?P<group>[^)]*)\)|(?P<single>[A-Za-z_$][\w$]*))\s*=>",
+        r"(?:async\s*)?(?:<[^>{}\n;=]*>\s*)?(?:\((?P<group>[^)]*)\)|(?P<single>[A-Za-z_$][\w$]*))\s*=>",
         header,
     )
     if arrow_match:
         params = arrow_match.group("group") or arrow_match.group("single")
     else:
-        function_match = re.search(r"\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\((?P<params>[^)]*)\)", header)
-        method_match = re.search(r"\b[A-Za-z_$][\w$]*\s*\((?P<params>[^)]*)\)\s*$", header)
+        function_match = re.search(
+            r"\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\((?P<params>[^)]*)\)",
+            header,
+        )
+        method_match = re.search(
+            r"\b[A-Za-z_$][\w$]*\s*(?:<[^>{}\n;=]*>)?\s*\((?P<params>[^)]*)\)\s*$",
+            header,
+        )
         if function_match:
             params = function_match.group("params")
         elif method_match:

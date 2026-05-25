@@ -130,6 +130,52 @@ export function main() {
     assert not any(node["id"] in {"js:call:renamed", "js:call:helpers.qualified"} for node in graph["nodes"])
 
 
+def test_typescript_generic_function_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function identity<T>(value: T): T {
+  return value;
+}
+
+export const mapValue = <T,>(value: T) => identity(value);
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { mapValue } from "./helpers";
+
+function local<T>(value: T): T {
+  return value;
+}
+
+export const main = <T,>(value: T, local: () => T) => {
+  mapValue(value);
+  local();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:helpers.ts:identity" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:helpers.ts:mapValue" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:app.ts:local" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:app.ts:main" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:helpers.ts:mapValue"
+        and edge["to"] == "js:function:helpers.ts:identity"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:mapValue"
+        for edge in graph["edges"]
+    )
+    assert any(edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:local" for edge in graph["edges"])
+    assert not any(node["id"] in {"js:call:mapValue", "js:call:identity"} for node in graph["nodes"])
+
+
 def test_typescript_dynamic_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """
