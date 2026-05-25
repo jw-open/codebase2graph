@@ -479,6 +479,11 @@ def _add_reexported_javascript_function_ids(
                 )
                 for exported_name, function_id in additions.items():
                     for module_key in current_module_keys:
+                        if exported_name == "default":
+                            targets = default_function_index.setdefault(module_key, set())
+                            if function_id not in targets:
+                                targets.add(function_id)
+                                changed = True
                         targets = function_index.setdefault((module_key, exported_name), set())
                         if function_id not in targets:
                             targets.add(function_id)
@@ -493,6 +498,11 @@ def _add_reexported_javascript_function_ids(
             )
             for exported_name, function_id in local_exports.items():
                 for module_key in current_module_keys:
+                    if exported_name == "default":
+                        targets = default_function_index.setdefault(module_key, set())
+                        if function_id not in targets:
+                            targets.add(function_id)
+                            changed = True
                     targets = function_index.setdefault((module_key, exported_name), set())
                     if function_id not in targets:
                         targets.add(function_id)

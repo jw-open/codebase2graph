@@ -298,6 +298,72 @@ export function main() {
     assert not any(node["id"] in {"js:call:direct", "js:call:renamed", "js:call:execute"} for node in graph["nodes"])
 
 
+def test_typescript_default_reexported_import_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export default function run() {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "index.ts").write_text(
+        """
+export { default } from "./helpers";
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import execute from "./index";
+
+export function main() {
+  execute();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:run"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:execute" for node in graph["nodes"])
+
+
+def test_typescript_local_default_export_list_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "index.ts").write_text(
+        """
+function run() {
+  return 1;
+}
+
+export { run as default };
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import execute from "./index";
+
+export function main() {
+  execute();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:index.ts:run"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:execute" for node in graph["nodes"])
+
+
 def test_typescript_local_export_list_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.ts").write_text(
         """
