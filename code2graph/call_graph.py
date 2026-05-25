@@ -399,7 +399,28 @@ def _local_javascript_object_method_targets(text: str, local_functions: dict[str
             function_id = local_functions.get(method_name or "")
             if method_name and function_id:
                 targets[f"{object_name}.{method_name}"] = function_id
+        for property_name, function_id in _javascript_object_function_properties(object_body, local_functions).items():
+            targets[f"{object_name}.{property_name}"] = function_id
     return targets
+
+
+def _javascript_object_function_properties(object_body: str, local_functions: dict[str, str]) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    for item in _split_javascript_bindings(object_body):
+        item = item.strip()
+        if not item or "(" in item:
+            continue
+        property_name, value = _split_javascript_top_level_colon(item)
+        if value is None:
+            value = property_name
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", property_name):
+            continue
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", value):
+            continue
+        function_id = local_functions.get(value)
+        if function_id:
+            properties[property_name] = function_id
+    return properties
 
 
 def _has_later_javascript_assignment(text: str, name: str, start: int) -> bool:
