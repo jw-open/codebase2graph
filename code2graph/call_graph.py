@@ -78,7 +78,7 @@ JS_DESTRUCTURING_ALIAS_DECL_RE = re.compile(
 )
 JS_CLASS_RE = re.compile(
     r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)"
-    r"(?:\s+extends\s+(?P<base>[A-Za-z_$][\w$]*))?[^{]*\{"
+    r"(?:\s+extends\s+(?P<base>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*))?[^{]*\{"
 )
 JS_DEFAULT_CLASS_RE = re.compile(r"^\s*export\s+default\s+class\s+(?P<name>[A-Za-z_$][\w$]*)\b", re.M)
 JS_NEW_INSTANCE_RE = re.compile(
