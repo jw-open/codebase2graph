@@ -703,6 +703,51 @@ func main() {
     assert not any(node["id"] in {"go:call:s.Helper", "go:call:svc.Helper"} for node in graph["nodes"])
 
 
+def test_go_call_graph_resolves_imported_package_instance_methods(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "service.go").write_text(
+        """
+package pkg
+
+type Service struct{}
+
+func (s *Service) Helper() int {
+    return 1
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.go").write_text(
+        """
+package main
+
+import (
+    "example.com/app/pkg"
+    . "example.com/app/pkg"
+)
+
+func main() {
+    svc := pkg.Service{}
+    dot := Service{}
+    svc.Helper()
+    dot.Helper()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "go:function:main.go:main"
+        and edge["to"] == "go:method:pkg/service.go:Service.Helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"go:call:svc.Helper", "go:call:dot.Helper"} for node in graph["nodes"])
+
+
 def test_java_call_graph_resolves_same_class_and_instance_methods(tmp_path: Path) -> None:
     (tmp_path / "Service.java").write_text(
         """

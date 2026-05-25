@@ -764,7 +764,7 @@ def _build_go_call_graph(root: Path) -> Graph:
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": "go", "path": rel})
         local_functions = _go_local_functions(package_functions, package_key)
         imported_functions = _go_imported_functions(text, package_functions, package_paths, module_name)
-        known_types = _go_known_types(package_methods, package_key)
+        known_types = _go_known_type_refs(text, package_methods, package_paths, module_name, package_key)
         for index, match in enumerate(matches):
             name = match.group("name")
             receiver_name = _go_receiver_name(match.group("receiver"))
@@ -902,18 +902,41 @@ def _go_known_types(
     return {type_name for indexed_package, type_name, _method in package_methods if indexed_package == package_key}
 
 
-def _go_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    assignments: dict[str, set[str | None]] = {}
+def _go_known_type_refs(
+    text: str,
+    package_methods: dict[tuple[str, str, str], set[str]],
+    package_paths: dict[str, str],
+    module_name: str,
+    package_key: str,
+) -> dict[str, tuple[str, str]]:
+    known_types = {type_name: (package_key, type_name) for type_name in _go_known_types(package_methods, package_key)}
+    for alias, import_path in _go_imports(text):
+        imported_package_key = package_paths.get(import_path)
+        if imported_package_key is None and module_name and import_path.startswith(f"{module_name}/"):
+            imported_package_key = import_path.removeprefix(f"{module_name}/")
+        if imported_package_key is None:
+            continue
+        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        for indexed_package, type_name, _method in package_methods:
+            if indexed_package == imported_package_key:
+                known_types[f"{package_alias}.{type_name}"] = (indexed_package, type_name)
+                if alias == ".":
+                    known_types[type_name] = (indexed_package, type_name)
+    return known_types
+
+
+def _go_instance_aliases(body: str, known_types: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+    aliases: dict[str, tuple[str, str]] = {}
+    assignments: dict[str, set[tuple[str, str] | None]] = {}
     for match in GO_VAR_ASSIGN_RE.finditer(body):
         name = match.group("name")
         type_name = match.group("type")
-        assignments.setdefault(name, set()).add(type_name if type_name in known_types else None)
-    for name, type_names in assignments.items():
-        if len(type_names) == 1:
-            type_name = next(iter(type_names))
-            if type_name:
-                aliases[name] = type_name
+        assignments.setdefault(name, set()).add(known_types.get(type_name))
+    for name, type_refs in assignments.items():
+        if len(type_refs) == 1:
+            type_ref = next(iter(type_refs))
+            if type_ref:
+                aliases[name] = type_ref
     return aliases
 
 
@@ -923,15 +946,16 @@ def _go_method_call_target(
     receiver_type: str | None,
     package_key: str,
     package_methods: dict[tuple[str, str, str], set[str]],
-    instance_aliases: dict[str, str],
+    instance_aliases: dict[str, tuple[str, str]],
 ) -> str | None:
     receiver, _, method_name = call.partition(".")
     if not method_name:
         return None
-    type_name = receiver_type if receiver == receiver_name else instance_aliases.get(receiver)
-    if not type_name:
+    type_ref = (package_key, receiver_type) if receiver == receiver_name and receiver_type else instance_aliases.get(receiver)
+    if not type_ref:
         return None
-    method_ids = package_methods.get((package_key, type_name, method_name), set())
+    owner_package, type_name = type_ref
+    method_ids = package_methods.get((owner_package, type_name, method_name), set())
     if len(method_ids) == 1:
         return next(iter(method_ids))
     return None
