@@ -923,6 +923,10 @@ GO_VAR_ASSIGN_RE = re.compile(
     r"\b(?P<name>[A-Za-z_]\w*)\s*(?::=|=)\s*&?(?P<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\{",
     re.M,
 )
+GO_VAR_CALL_ASSIGN_RE = re.compile(
+    r"\b(?P<name>[A-Za-z_]\w*)\s*(?::=|=)\s*(?P<call>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\(",
+    re.M,
+)
 GO_KEYWORDS = {
     "append",
     "cap",
@@ -955,6 +959,7 @@ def _build_go_call_graph(root: Path) -> Graph:
     graph = Graph()
     files: list[tuple[Path, str, str, list[re.Match[str]], str]] = []
     package_functions: dict[tuple[str, str], set[str]] = {}
+    package_function_returns: dict[tuple[str, str], set[tuple[str, str]]] = {}
     package_methods: dict[tuple[str, str, str], set[str]] = {}
     package_paths: dict[str, str] = {}
     module_name = _go_module_name(root)
@@ -978,12 +983,29 @@ def _build_go_call_graph(root: Path) -> Graph:
             else:
                 package_functions.setdefault((package_key, name), set()).add(f"go:function:{rel}:{name}")
 
+    for _path, _rel, text, matches, package_key in files:
+        known_types = _go_known_type_refs(text, package_methods, package_paths, module_name, package_key)
+        for match in matches:
+            if match.group("receiver"):
+                continue
+            return_type = _go_function_return_type(text, match, known_types)
+            if return_type:
+                package_function_returns.setdefault((package_key, match.group("name")), set()).add(return_type)
+
     for path, rel, text, matches, package_key in files:
         file_id = rel_id("file", root, path)
         graph.add_node(file_id, path.name, attributes={"kind": "file", "language": "go", "path": rel})
         local_functions = _go_local_functions(package_functions, package_key)
         imported_functions = _go_imported_functions(text, package_functions, package_paths, module_name)
         known_types = _go_known_type_refs(text, package_methods, package_paths, module_name, package_key)
+        constructor_returns = _go_constructor_returns(
+            text,
+            package_functions,
+            package_function_returns,
+            package_paths,
+            module_name,
+            package_key,
+        )
         for index, match in enumerate(matches):
             name = match.group("name")
             receiver_name = _go_receiver_name(match.group("receiver"))
@@ -1010,7 +1032,7 @@ def _build_go_call_graph(root: Path) -> Graph:
                 },
             )
             graph.add_edge(file_id, func_id, "defines")
-            instance_aliases = _go_instance_aliases(body, known_types)
+            instance_aliases = _go_instance_aliases(body, known_types, constructor_returns)
             for call in GO_CALL_RE.findall(body):
                 base = call.split(".", 1)[0]
                 if base in GO_KEYWORDS or call == name:
@@ -1144,19 +1166,104 @@ def _go_known_type_refs(
     return known_types
 
 
-def _go_instance_aliases(body: str, known_types: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+def _go_constructor_returns(
+    text: str,
+    package_functions: dict[tuple[str, str], set[str]],
+    package_function_returns: dict[tuple[str, str], set[tuple[str, str]]],
+    package_paths: dict[str, str],
+    module_name: str,
+    package_key: str,
+) -> dict[str, tuple[str, str]]:
+    constructor_returns: dict[str, tuple[str, str]] = {}
+    for (indexed_package, function_name), return_types in package_function_returns.items():
+        function_ids = package_functions.get((indexed_package, function_name), set())
+        if indexed_package == package_key and len(function_ids) == 1 and len(return_types) == 1:
+            constructor_returns[function_name] = next(iter(return_types))
+
+    for alias, import_path in _go_imports(text):
+        imported_package_key = package_paths.get(import_path)
+        if imported_package_key is None and module_name and import_path.startswith(f"{module_name}/"):
+            imported_package_key = import_path.removeprefix(f"{module_name}/")
+        if imported_package_key is None:
+            continue
+        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        for (indexed_package, function_name), return_types in package_function_returns.items():
+            function_ids = package_functions.get((indexed_package, function_name), set())
+            if indexed_package != imported_package_key or len(function_ids) != 1 or len(return_types) != 1:
+                continue
+            return_type = next(iter(return_types))
+            constructor_returns[f"{package_alias}.{function_name}"] = return_type
+            if alias == ".":
+                constructor_returns[function_name] = return_type
+    return constructor_returns
+
+
+def _go_instance_aliases(
+    body: str,
+    known_types: dict[str, tuple[str, str]],
+    constructor_returns: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, tuple[str, str]]:
     aliases: dict[str, tuple[str, str]] = {}
     assignments: dict[str, set[tuple[str, str] | None]] = {}
     for match in GO_VAR_ASSIGN_RE.finditer(body):
         name = match.group("name")
         type_name = match.group("type")
         assignments.setdefault(name, set()).add(known_types.get(type_name))
+    for match in GO_VAR_CALL_ASSIGN_RE.finditer(body):
+        name = match.group("name")
+        call_name = match.group("call")
+        assignments.setdefault(name, set()).add((constructor_returns or {}).get(call_name))
     for name, type_refs in assignments.items():
         if len(type_refs) == 1:
             type_ref = next(iter(type_refs))
             if type_ref:
                 aliases[name] = type_ref
     return aliases
+
+
+def _go_function_return_type(
+    text: str,
+    match: re.Match[str],
+    known_types: dict[str, tuple[str, str]],
+) -> tuple[str, str] | None:
+    params_start = match.end() - 1
+    params_end = _matching_delimiter_index(text, params_start, "(", ")")
+    if params_end is None:
+        return None
+    body_start = text.find("{", params_end)
+    if body_start < 0:
+        return None
+    semicolon = text.find(";", params_end)
+    if semicolon >= 0 and semicolon < body_start:
+        return None
+    signature_return = text[params_end + 1 : body_start].strip()
+    if not signature_return:
+        return None
+    if signature_return.startswith("("):
+        if not signature_return.endswith(")"):
+            return None
+        signature_return = signature_return[1:-1].strip()
+    if "," in signature_return:
+        return None
+    parts = signature_return.split()
+    type_expr = parts[-1] if parts else ""
+    type_name = type_expr.strip("*[]")
+    return known_types.get(type_name)
+
+
+def _matching_delimiter_index(text: str, start: int, open_char: str, close_char: str) -> int | None:
+    if start < 0 or start >= len(text) or text[start] != open_char:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
 def _go_method_call_target(

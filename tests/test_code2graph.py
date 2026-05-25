@@ -1175,6 +1175,67 @@ func main() {
     assert not any(node["id"] in {"go:call:svc.Helper", "go:call:dot.Helper"} for node in graph["nodes"])
 
 
+def test_go_call_graph_resolves_constructor_return_instance_methods(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "service.go").write_text(
+        """
+package pkg
+
+type Service struct{}
+
+func NewService() *Service {
+    return &Service{}
+}
+
+func (s *Service) Helper() int {
+    return 1
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.go").write_text(
+        """
+package main
+
+import "example.com/app/pkg"
+
+type Local struct{}
+
+func NewLocal() Local {
+    return Local{}
+}
+
+func (l Local) Helper() int {
+    return 2
+}
+
+func main() {
+    local := NewLocal()
+    service := pkg.NewService()
+    local.Helper()
+    service.Helper()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "go:function:main.go:main"
+        and edge["to"] == "go:method:main.go:Local.Helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "go:function:main.go:main"
+        and edge["to"] == "go:method:pkg/service.go:Service.Helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"go:call:local.Helper", "go:call:service.Helper"} for node in graph["nodes"])
+
+
 def test_java_call_graph_resolves_same_class_and_instance_methods(tmp_path: Path) -> None:
     (tmp_path / "Service.java").write_text(
         """
