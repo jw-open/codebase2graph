@@ -168,6 +168,52 @@ export function main() {
     assert not any(node["id"] == "js:call:execute" for node in graph["nodes"])
 
 
+def test_typescript_reexported_imported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export function direct() {
+  return 1;
+}
+
+export default function run() {
+  return 2;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "index.ts").write_text(
+        """
+export * from "./helpers";
+export { direct as renamed, default as execute } from "./helpers";
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { direct, renamed, execute } from "./index";
+
+export function main() {
+  direct();
+  renamed();
+  execute();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:function:helpers.ts:run"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:direct", "js:call:renamed", "js:call:execute"} for node in graph["nodes"])
+
+
 def test_javascript_require_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.js").write_text(
         """

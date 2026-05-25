@@ -20,6 +20,10 @@ JS_REQUIRE_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<binding>\{[^}]+\}|[A-Za-z_$][\w$]*)\s*=\s*require\(['\"](?P<module>[^'\"]+)['\"]\)",
     re.M,
 )
+JS_REEXPORT_RE = re.compile(
+    r"^\s*export\s+(?P<clause>\{[^}]+\}|\*)\s+from\s+['\"](?P<module>[^'\"]+)['\"]",
+    re.M,
+)
 JS_ALIAS_DECL_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
@@ -83,6 +87,8 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         for name, function_id in _default_javascript_function_ids(rel, matches).items():
             for module_key in _javascript_module_keys(root, path):
                 default_function_index.setdefault(module_key, set()).add(function_id)
+
+    _add_reexported_javascript_function_ids(root, files, function_index, default_function_index, module_index)
 
     for path, rel, text, matches in files:
         file_id = rel_id("file", root, path)
@@ -263,6 +269,81 @@ def _imported_javascript_function_ids(
         else:
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
+
+
+def _add_reexported_javascript_function_ids(
+    root: Path,
+    files: list[tuple[Path, str, str, list[re.Match[str]]]],
+    function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
+    module_index: dict[str, set[Path]],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for path, _rel, text, _matches in files:
+            current_module_keys = _javascript_module_keys(root, path)
+            for match in JS_REEXPORT_RE.finditer(text):
+                target_module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+                if not target_module_keys:
+                    continue
+                clause = match.group("clause")
+                additions = (
+                    _star_reexported_javascript_functions(function_index, target_module_keys)
+                    if clause == "*"
+                    else _named_reexported_javascript_functions(
+                        function_index,
+                        default_function_index,
+                        target_module_keys,
+                        clause,
+                    )
+                )
+                for exported_name, function_id in additions.items():
+                    for module_key in current_module_keys:
+                        targets = function_index.setdefault((module_key, exported_name), set())
+                        if function_id not in targets:
+                            targets.add(function_id)
+                            changed = True
+
+
+def _named_reexported_javascript_functions(
+    function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    named_match = re.search(r"\{(?P<named>[^}]+)\}", clause)
+    if not named_match:
+        return exported
+    for item in named_match.group("named").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = re.split(r"\s+as\s+", item, maxsplit=1)
+        imported_name = parts[0].strip()
+        exported_name = parts[1].strip() if len(parts) == 2 else imported_name
+        target_id = (
+            _unique_default_javascript_function(default_function_index, module_keys)
+            if imported_name == "default"
+            else _unique_javascript_function(function_index, module_keys, imported_name)
+        )
+        if target_id:
+            exported[exported_name] = target_id
+    return exported
+
+
+def _star_reexported_javascript_functions(
+    function_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    function_names = {function_name for module_key, function_name in function_index if module_key in module_keys}
+    for function_name in function_names:
+        target_id = _unique_javascript_function(function_index, module_keys, function_name)
+        if target_id:
+            exported[function_name] = target_id
+    return exported
 
 
 def _add_default_javascript_import(
