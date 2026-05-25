@@ -112,11 +112,18 @@ class PythonCollector(ast.NodeVisitor):
             self.class_index,
             current_is_package=self.current_module_is_package,
         )
-        known_classes = {
+        base_known_classes = {
             **self.imported_classes,
             **self.module_class_aliases,
             **self.local_classes,
             **scoped_imported_classes,
+        }
+        function_class_aliases, shadowed_classes = _function_class_reference_aliases(node, base_known_classes)
+        known_classes = {**base_known_classes, **function_class_aliases}
+        resolvable_classes = {
+            name: class_id
+            for name, class_id in known_classes.items()
+            if name not in shadowed_classes or name in function_class_aliases
         }
         nested_functions = self._nested_function_ids(node)
         enclosing_functions = _merge_scopes(self.lexical_function_scopes)
@@ -132,12 +139,12 @@ class PythonCollector(ast.NodeVisitor):
         class_aliases = {
             **self.module_instance_aliases,
             **(self.class_instance_aliases.get(enclosing_class_id, {}) if enclosing_class_id else {}),
-            **_function_class_aliases(node, known_classes, known_factory_returns),
+            **_function_class_aliases(node, resolvable_classes, known_factory_returns),
         }
         known_callables = {
             **known_functions,
             **self._method_reference_targets(class_aliases),
-            **self._method_reference_targets(known_classes),
+            **self._method_reference_targets(resolvable_classes),
             **self._method_reference_targets(("self", "cls"), enclosing_class_id),
         }
         function_aliases, shadowed_functions = _function_aliases(
@@ -154,8 +161,8 @@ class PythonCollector(ast.NodeVisitor):
                     or self._method_call_target(call_name, enclosing_class_id)
                     or self._instance_method_call_target(call_name, class_aliases)
                     or self._instance_call_target(call_name, class_aliases)
-                    or self._class_method_call_target(call_name, known_classes)
-                    or self._class_call_target(call_name, known_classes)
+                    or self._class_method_call_target(call_name, resolvable_classes)
+                    or self._class_call_target(call_name, resolvable_classes)
                 )
                 if not target_id:
                     if call_name in nested_functions:
@@ -938,6 +945,25 @@ def _function_aliases(
             function_id = next(iter(function_ids))
             if function_id:
                 aliases[name] = function_id
+    return aliases, set(visitor.assignments)
+
+
+def _function_class_reference_aliases(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    known_classes: dict[str, str],
+) -> tuple[dict[str, str], set[str]]:
+    visitor = _ClassAliasReferenceVisitor(known_classes)
+    for name in _argument_names(node.args):
+        visitor.assignments.setdefault(name, set()).add(None)
+    for child in node.body:
+        visitor.visit(child)
+
+    aliases: dict[str, str] = {}
+    for name, class_ids in visitor.assignments.items():
+        if len(class_ids) == 1:
+            class_id = next(iter(class_ids))
+            if class_id:
+                aliases[name] = class_id
     return aliases, set(visitor.assignments)
 
 

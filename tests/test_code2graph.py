@@ -2679,6 +2679,74 @@ def main():
     )
 
 
+def test_python_function_class_alias_calls_resolve_to_project_methods(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from helpers import Service
+
+def main():
+    ServiceAlias = Service
+    worker = ServiceAlias()
+    worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:helpers.py:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] == "py:method:helpers.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:ServiceAlias", "py:call:worker.helper"} for node in graph["nodes"])
+
+
+def test_python_shadowed_class_alias_calls_remain_placeholders(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+def main(Service):
+    ServiceAlias = Service
+    worker = Service()
+    ServiceAlias()
+    worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:Service" for edge in graph["edges"])
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:ServiceAlias"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:call:worker.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:app.py:main" and edge["to"] == "py:class:app.py:Service"
+        for edge in graph["edges"]
+    )
+
+
 def test_python_module_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """
