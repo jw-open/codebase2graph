@@ -18,6 +18,8 @@ JS_FUNC_RE = re.compile(
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)+(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
+    r"|^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"
     r"|^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\("
     r"|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",

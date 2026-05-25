@@ -788,6 +788,47 @@ function main() {
     assert not any(node["id"] == "js:call:run" for node in graph["nodes"])
 
 
+def test_javascript_commonjs_inline_exported_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.js").write_text(
+        """
+exports.direct = function () {
+  return 1;
+}
+
+module.exports.qualified = (value) => {
+  return direct(value);
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+const helpers = require("./helpers");
+const { direct } = require("./helpers");
+
+function main() {
+  direct();
+  helpers.qualified();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(node["id"] == "js:function:helpers.js:direct" for node in graph["nodes"])
+    assert any(node["id"] == "js:function:helpers.js:qualified" for node in graph["nodes"])
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:direct"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.js:main" and edge["to"] == "js:function:helpers.js:qualified"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:direct", "js:call:helpers.qualified"} for node in graph["nodes"])
+
+
 def test_javascript_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.js").write_text(
         """
