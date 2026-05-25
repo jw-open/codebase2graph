@@ -999,6 +999,40 @@ class Child extends Base {
     assert not any(node["id"] == "js:call:super.load" for node in graph["nodes"])
 
 
+def test_typescript_super_method_calls_resolve_to_imported_base_methods(tmp_path: Path) -> None:
+    (tmp_path / "base.ts").write_text(
+        """
+export class Base {
+  load() {
+    return 1;
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.ts").write_text(
+        """
+import { Base } from "./base";
+
+class Child extends Base {
+  run() {
+    return super.load();
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:child.ts:run"
+        and edge["to"] == "js:function:base.ts:load"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "js:call:super.load" for node in graph["nodes"])
+
+
 def test_typescript_object_literal_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
     (tmp_path / "app.ts").write_text(
         """

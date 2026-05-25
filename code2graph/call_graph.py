@@ -292,11 +292,12 @@ def _local_javascript_class_bases(text: str, known_classes: set[str]) -> dict[st
 
     bases: dict[str, str] = {}
     for class_name, base_name in discovered:
+        base_count = class_counts.get(base_name, 0)
         if (
             class_name in known_classes
             and base_name in known_classes
             and class_counts.get(class_name) == 1
-            and class_counts.get(base_name) == 1
+            and base_count <= 1
         ):
             bases[class_name] = base_name
     return bases
