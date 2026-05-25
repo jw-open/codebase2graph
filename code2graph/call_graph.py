@@ -65,7 +65,7 @@ JS_NEW_INSTANCE_RE = re.compile(
     r"(?P<class>[A-Za-z_$][\w$]*)\s*\(",
 )
 JS_CONST_OBJECT_LITERAL_RE = re.compile(
-    r"^\s*const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*\{",
+    r"^\s*(?:export\s+)?const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*\{",
     re.M,
 )
 JS_ASSIGNMENT_RE = re.compile(r"^\s*(?P<name>[A-Za-z_$][\w$]*)\s*=", re.M)
@@ -119,7 +119,9 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         files.append((path, rel, text, matches))
         for module_key in _javascript_module_keys(root, path):
             module_index.setdefault(module_key, set()).add(path)
-        for name, function_id in _local_javascript_function_ids(rel, matches).items():
+        local_functions = _local_javascript_function_ids(rel, matches)
+        object_method_targets = _local_javascript_object_method_targets(text, local_functions)
+        for name, function_id in {**local_functions, **object_method_targets}.items():
             for module_key in _javascript_module_keys(root, path):
                 function_index.setdefault((module_key, name), set()).add(function_id)
         for name, function_id in _default_javascript_function_ids(rel, matches).items():
@@ -716,6 +718,26 @@ def _add_named_javascript_imports(
         target_id = _unique_javascript_function(function_index, module_keys, exported_name)
         if target_id:
             imported[local_name] = target_id
+        _add_named_javascript_member_imports(imported, function_index, module_keys, exported_name, local_name)
+
+
+def _add_named_javascript_member_imports(
+    imported: dict[str, str],
+    function_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+    exported_name: str,
+    local_name: str,
+) -> None:
+    prefix = f"{exported_name}."
+    member_names = {
+        function_name
+        for module_key, function_name in function_index
+        if module_key in module_keys and function_name.startswith(prefix)
+    }
+    for member_name in member_names:
+        target_id = _unique_javascript_function(function_index, module_keys, member_name)
+        if target_id:
+            imported[f"{local_name}.{member_name.removeprefix(prefix)}"] = target_id
 
 
 def _add_namespace_javascript_imports(
