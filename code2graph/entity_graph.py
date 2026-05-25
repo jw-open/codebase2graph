@@ -20,12 +20,26 @@ IMPORT_RE = re.compile(
     re.M,
 )
 TS_ENTITY_RE = re.compile(r"^\s*export\s+(?:default\s+)?(?:class|function|interface|type|const)\s+([A-Za-z_$][\w$]*)|^\s*(?:class|function)\s+([A-Za-z_$][\w$]*)", re.M)
+GO_ENTITY_RE = re.compile(
+    r"^\s*func\s+(?:\((?P<receiver>[^)]+)\)\s*)?(?P<func>[A-Za-z_]\w*)\s*\("
+    r"|^\s*type\s+(?P<type>[A-Za-z_]\w*)\s+(?:struct|interface)\b",
+    re.M,
+)
+GO_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?:"
+    r"(?:\.|_|[A-Za-z_]\w*)?\s*\"(?P<single>[^\"]+)\""
+    r"|\((?P<block>.*?)\)"
+    r")",
+    re.M | re.S,
+)
+GO_IMPORT_ITEM_RE = re.compile(r"^\s*(?:\.|_|[A-Za-z_]\w*)?\s*\"(?P<path>[^\"]+)\"", re.M)
 
 
 def build_entity_graph(root: Path) -> Graph:
     graph = Graph()
     python_modules = _python_module_index(root)
     javascript_modules = _javascript_module_index(root)
+    go_modules = _go_module_index(root)
     for path in iter_files(root):
         if path.suffix not in SOURCE_EXTENSIONS:
             continue
@@ -40,7 +54,10 @@ def build_entity_graph(root: Path) -> Graph:
         if path.suffix in JAVASCRIPT_EXTENSIONS:
             _add_javascript_entities(graph, root, path, text, file_id)
             _add_javascript_imports(graph, root, path, text, file_id, javascript_modules)
-        if path.suffix == ".py":
+        elif path.suffix == ".go":
+            _add_go_entities(graph, root, path, text, file_id)
+            _add_go_imports(graph, file_id, text, go_modules, _go_module_name(root))
+        elif path.suffix == ".py":
             _add_python_imports(graph, root, path, text, file_id, python_modules)
         elif path.suffix not in JAVASCRIPT_EXTENSIONS:
             _add_imports(graph, text, file_id, language)
@@ -59,6 +76,30 @@ def _add_javascript_entities(graph: Graph, root: Path, path: Path, text: str, fi
             name,
             attributes={"kind": "entity", "language": _language(path), "path": rel},
         )
+        graph.add_edge(file_id, entity_id, "defines")
+
+
+def _add_go_entities(graph: Graph, root: Path, path: Path, text: str, file_id: str) -> None:
+    rel = path.relative_to(root).as_posix()
+    for match in GO_ENTITY_RE.finditer(text):
+        type_name = match.group("type")
+        func_name = match.group("func")
+        receiver_type = _go_receiver_type(match.group("receiver"))
+        if type_name:
+            entity_id = f"go:entity:{rel}:{type_name}"
+            label = type_name
+            kind = "entity"
+        elif receiver_type and func_name:
+            entity_id = f"go:method:{rel}:{receiver_type}.{func_name}"
+            label = f"{receiver_type}.{func_name}"
+            kind = "method"
+        elif func_name:
+            entity_id = f"go:function:{rel}:{func_name}"
+            label = func_name
+            kind = "function"
+        else:
+            continue
+        graph.add_node(entity_id, label, attributes={"kind": kind, "language": "go", "path": rel})
         graph.add_edge(file_id, entity_id, "defines")
 
 
@@ -173,6 +214,70 @@ def _resolve_javascript_import(
     for candidate in candidates:
         target_ids.update(javascript_modules.get(candidate, set()))
     return sorted(target_ids)
+
+
+def _add_go_imports(
+    graph: Graph,
+    file_id: str,
+    text: str,
+    go_modules: dict[str, str],
+    module_name: str,
+) -> None:
+    for import_path in _go_imports(text):
+        _add_import(graph, file_id, "go", import_path)
+        target_id = go_modules.get(import_path)
+        if target_id:
+            graph.add_edge(file_id, target_id, "imports")
+            continue
+        if module_name and import_path.startswith(f"{module_name}/"):
+            target_id = go_modules.get(import_path.removeprefix(f"{module_name}/"))
+            if target_id:
+                graph.add_edge(file_id, target_id, "imports")
+
+
+def _go_imports(text: str) -> list[str]:
+    imports: list[str] = []
+    for match in GO_IMPORT_RE.finditer(text):
+        if match.group("single"):
+            imports.append(match.group("single"))
+            continue
+        block = match.group("block")
+        if not block:
+            continue
+        imports.extend(item.group("path") for item in GO_IMPORT_ITEM_RE.finditer(block))
+    return imports
+
+
+def _go_module_index(root: Path) -> dict[str, str]:
+    modules: dict[str, str] = {}
+    module_name = _go_module_name(root)
+    for path in iter_files(root):
+        if path.suffix != ".go":
+            continue
+        package_key = _go_package_key(root, path)
+        file_id = rel_id("file", root, path)
+        modules.setdefault(package_key, file_id)
+        if module_name:
+            modules.setdefault("/".join(part for part in [module_name, package_key] if part), file_id)
+    return modules
+
+
+def _go_module_name(root: Path) -> str:
+    match = re.search(r"^\s*module\s+(\S+)", read_text(root / "go.mod"), re.M)
+    return match.group(1) if match else ""
+
+
+def _go_package_key(root: Path, path: Path) -> str:
+    parent = path.parent.relative_to(root).as_posix()
+    return "" if parent == "." else parent
+
+
+def _go_receiver_type(receiver: str | None) -> str | None:
+    if not receiver:
+        return None
+    parts = receiver.strip().split()
+    type_name = parts[-1] if parts else ""
+    return type_name.strip("*[]")
 
 
 def _python_module_index(root: Path) -> dict[str, str]:

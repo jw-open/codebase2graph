@@ -56,6 +56,7 @@ def build_call_graph(root: Path) -> Graph:
     graph = Graph()
     graph.merge(build_python_graph(root))
     graph.merge(_build_javascript_call_graph(root))
+    graph.merge(_build_go_call_graph(root))
     if graph.nodes:
         graph.add_node("call-root", "Call Graph", attributes={"kind": "call_graph"})
         for node_id, node in list(graph.nodes.items()):
@@ -526,3 +527,253 @@ def _javascript_module_keys(root: Path, path: Path) -> list[str]:
 
 def _language(path: Path) -> str:
     return "typescript" if path.suffix in {".ts", ".tsx"} else "javascript"
+
+
+GO_FUNC_RE = re.compile(
+    r"^\s*func\s+(?:\((?P<receiver>[^)]+)\)\s*)?(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.M,
+)
+GO_CALL_RE = re.compile(r"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\(")
+GO_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?:"
+    r"(?P<single_alias>\.|_|[A-Za-z_]\w*)?\s*\"(?P<single>[^\"]+)\""
+    r"|\((?P<block>.*?)\)"
+    r")",
+    re.M | re.S,
+)
+GO_IMPORT_ITEM_RE = re.compile(r"^\s*(?P<alias>\.|_|[A-Za-z_]\w*)?\s*\"(?P<path>[^\"]+)\"", re.M)
+GO_VAR_ASSIGN_RE = re.compile(
+    r"\b(?P<name>[A-Za-z_]\w*)\s*(?::=|=)\s*&?(?P<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\{",
+    re.M,
+)
+GO_KEYWORDS = {
+    "append",
+    "cap",
+    "close",
+    "complex",
+    "copy",
+    "delete",
+    "defer",
+    "for",
+    "func",
+    "go",
+    "if",
+    "imag",
+    "len",
+    "make",
+    "new",
+    "panic",
+    "print",
+    "println",
+    "range",
+    "real",
+    "recover",
+    "return",
+    "select",
+    "switch",
+}
+
+
+def _build_go_call_graph(root: Path) -> Graph:
+    graph = Graph()
+    files: list[tuple[Path, str, str, list[re.Match[str]], str]] = []
+    package_functions: dict[tuple[str, str], set[str]] = {}
+    package_methods: dict[tuple[str, str, str], set[str]] = {}
+    package_paths: dict[str, str] = {}
+    module_name = _go_module_name(root)
+
+    for path in iter_files(root):
+        if path.suffix != ".go":
+            continue
+        rel = path.relative_to(root).as_posix()
+        text = read_text(path)
+        package_key = _go_package_key(root, path)
+        package_paths[_go_package_import_path(root, path, module_name)] = package_key
+        matches = list(GO_FUNC_RE.finditer(text))
+        files.append((path, rel, text, matches, package_key))
+        for match in matches:
+            name = match.group("name")
+            receiver_type = _go_receiver_type(match.group("receiver"))
+            if receiver_type:
+                package_methods.setdefault((package_key, receiver_type, name), set()).add(
+                    f"go:method:{rel}:{receiver_type}.{name}"
+                )
+            else:
+                package_functions.setdefault((package_key, name), set()).add(f"go:function:{rel}:{name}")
+
+    for path, rel, text, matches, package_key in files:
+        file_id = rel_id("file", root, path)
+        graph.add_node(file_id, path.name, attributes={"kind": "file", "language": "go", "path": rel})
+        local_functions = _go_local_functions(package_functions, package_key)
+        imported_functions = _go_imported_functions(text, package_functions, package_paths, module_name)
+        known_types = _go_known_types(package_methods, package_key)
+        for index, match in enumerate(matches):
+            name = match.group("name")
+            receiver_name = _go_receiver_name(match.group("receiver"))
+            receiver_type = _go_receiver_type(match.group("receiver"))
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            body = text[start:end]
+            if receiver_type:
+                func_id = f"go:method:{rel}:{receiver_type}.{name}"
+                kind = "method"
+                label = f"{receiver_type}.{name}"
+            else:
+                func_id = f"go:function:{rel}:{name}"
+                kind = "function"
+                label = name
+            graph.add_node(
+                func_id,
+                label,
+                attributes={
+                    "kind": kind,
+                    "language": "go",
+                    "path": rel,
+                    "line": str(text.count("\n", 0, start) + 1),
+                },
+            )
+            graph.add_edge(file_id, func_id, "defines")
+            instance_aliases = _go_instance_aliases(body, known_types)
+            for call in GO_CALL_RE.findall(body):
+                base = call.split(".", 1)[0]
+                if base in GO_KEYWORDS or call == name:
+                    continue
+                target_id = (
+                    local_functions.get(call)
+                    or imported_functions.get(call)
+                    or _go_method_call_target(
+                        call,
+                        receiver_name,
+                        receiver_type,
+                        package_key,
+                        package_methods,
+                        instance_aliases,
+                    )
+                )
+                if not target_id:
+                    target_id = f"go:call:{call}"
+                    graph.add_node(target_id, call, attributes={"kind": "call_target", "language": "go"})
+                graph.add_edge(func_id, target_id, "calls")
+    return graph
+
+
+def _go_module_name(root: Path) -> str:
+    match = re.search(r"^\s*module\s+(\S+)", read_text(root / "go.mod"), re.M)
+    return match.group(1) if match else ""
+
+
+def _go_package_key(root: Path, path: Path) -> str:
+    parent = path.parent.relative_to(root).as_posix()
+    return "" if parent == "." else parent
+
+
+def _go_package_import_path(root: Path, path: Path, module_name: str) -> str:
+    package_key = _go_package_key(root, path)
+    if module_name:
+        return "/".join(part for part in [module_name, package_key] if part)
+    return package_key
+
+
+def _go_receiver_type(receiver: str | None) -> str | None:
+    if not receiver:
+        return None
+    parts = receiver.strip().split()
+    type_name = parts[-1] if parts else ""
+    return type_name.strip("*[]")
+
+
+def _go_receiver_name(receiver: str | None) -> str | None:
+    if not receiver:
+        return None
+    parts = receiver.strip().split()
+    return parts[0].strip("*[]") if len(parts) > 1 else None
+
+
+def _go_local_functions(
+    package_functions: dict[tuple[str, str], set[str]],
+    package_key: str,
+) -> dict[str, str]:
+    local: dict[str, str] = {}
+    for (indexed_package, name), function_ids in package_functions.items():
+        if indexed_package == package_key and len(function_ids) == 1:
+            local[name] = next(iter(function_ids))
+    return local
+
+
+def _go_imported_functions(
+    text: str,
+    package_functions: dict[tuple[str, str], set[str]],
+    package_paths: dict[str, str],
+    module_name: str,
+) -> dict[str, str]:
+    imported: dict[str, str] = {}
+    for alias, import_path in _go_imports(text):
+        package_key = package_paths.get(import_path)
+        if package_key is None and module_name and import_path.startswith(f"{module_name}/"):
+            package_key = import_path.removeprefix(f"{module_name}/")
+        if package_key is None:
+            continue
+        package_alias = alias if alias and alias not in {".", "_"} else import_path.rsplit("/", 1)[-1]
+        for (indexed_package, name), function_ids in package_functions.items():
+            if indexed_package == package_key and len(function_ids) == 1:
+                function_id = next(iter(function_ids))
+                imported[f"{package_alias}.{name}"] = function_id
+                if alias == ".":
+                    imported[name] = function_id
+    return imported
+
+
+def _go_imports(text: str) -> list[tuple[str | None, str]]:
+    imports: list[tuple[str | None, str]] = []
+    for match in GO_IMPORT_RE.finditer(text):
+        if match.group("single"):
+            imports.append((match.group("single_alias"), match.group("single")))
+            continue
+        block = match.group("block")
+        if not block:
+            continue
+        for item in GO_IMPORT_ITEM_RE.finditer(block):
+            imports.append((item.group("alias"), item.group("path")))
+    return imports
+
+
+def _go_known_types(
+    package_methods: dict[tuple[str, str, str], set[str]],
+    package_key: str,
+) -> set[str]:
+    return {type_name for indexed_package, type_name, _method in package_methods if indexed_package == package_key}
+
+
+def _go_instance_aliases(body: str, known_types: set[str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    assignments: dict[str, set[str | None]] = {}
+    for match in GO_VAR_ASSIGN_RE.finditer(body):
+        name = match.group("name")
+        type_name = match.group("type")
+        assignments.setdefault(name, set()).add(type_name if type_name in known_types else None)
+    for name, type_names in assignments.items():
+        if len(type_names) == 1:
+            type_name = next(iter(type_names))
+            if type_name:
+                aliases[name] = type_name
+    return aliases
+
+
+def _go_method_call_target(
+    call: str,
+    receiver_name: str | None,
+    receiver_type: str | None,
+    package_key: str,
+    package_methods: dict[tuple[str, str, str], set[str]],
+    instance_aliases: dict[str, str],
+) -> str | None:
+    receiver, _, method_name = call.partition(".")
+    if not method_name:
+        return None
+    type_name = receiver_type if receiver == receiver_name else instance_aliases.get(receiver)
+    if not type_name:
+        return None
+    method_ids = package_methods.get((package_key, type_name, method_name), set())
+    if len(method_ids) == 1:
+        return next(iter(method_ids))
+    return None

@@ -449,6 +449,89 @@ class Service {
     assert not any(node["id"] == "js:call:this.helper" for node in graph["nodes"])
 
 
+def test_go_call_graph_resolves_same_package_and_local_imports(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "helper.go").write_text(
+        """
+package pkg
+
+func Helper() int {
+    return 1
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.go").write_text(
+        """
+package main
+
+import "example.com/app/pkg"
+
+func local() int {
+    return 2
+}
+
+func main() {
+    local()
+    pkg.Helper()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "go:function:main.go:main" and edge["to"] == "go:function:main.go:local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "go:function:main.go:main" and edge["to"] == "go:function:pkg/helper.go:Helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"go:call:local", "go:call:pkg.Helper"} for node in graph["nodes"])
+
+
+def test_go_call_graph_resolves_receiver_and_instance_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.go").write_text(
+        """
+package service
+
+type Service struct{}
+
+func (s *Service) Helper() int {
+    return 1
+}
+
+func (s *Service) Run() int {
+    return s.Helper()
+}
+
+func main() {
+    svc := Service{}
+    svc.Helper()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "go:method:service.go:Service.Run"
+        and edge["to"] == "go:method:service.go:Service.Helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "go:function:service.go:main"
+        and edge["to"] == "go:method:service.go:Service.Helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"go:call:s.Helper", "go:call:svc.Helper"} for node in graph["nodes"])
+
+
 def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
@@ -1364,6 +1447,48 @@ import react from "react";
     assert any(edge["from"] == "file:app.ts" and edge["to"] == "file:pkg/worker.js" for edge in graph["edges"])
     assert any(node["id"] == "import:typescript:react" for node in graph["nodes"])
     assert any(edge["from"] == "file:app.ts" and edge["to"] == "import:typescript:react" for edge in graph["edges"])
+
+
+def test_go_entity_graph_extracts_entities_and_resolves_local_imports(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "service.go").write_text(
+        """
+package service
+
+type Service struct{}
+
+func Run() int {
+    return 1
+}
+
+func (s *Service) Helper() int {
+    return Run()
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.go").write_text(
+        """
+package main
+
+import "example.com/app/service"
+
+func main() {
+    service.Run()
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(node["id"] == "go:entity:service/service.go:Service" for node in graph["nodes"])
+    assert any(node["id"] == "go:function:service/service.go:Run" for node in graph["nodes"])
+    assert any(node["id"] == "go:method:service/service.go:Service.Helper" for node in graph["nodes"])
+    assert any(edge["from"] == "file:main.go" and edge["to"] == "file:service/service.go" for edge in graph["edges"])
+    assert any(node["id"] == "import:go:example.com/app/service" for node in graph["nodes"])
 
 
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
