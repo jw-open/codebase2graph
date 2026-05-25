@@ -53,6 +53,11 @@ JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
     r"(?P<class>[A-Za-z_$][\w$]*)\s*\(",
 )
+JS_CONST_OBJECT_LITERAL_RE = re.compile(
+    r"^\s*const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*\{",
+    re.M,
+)
+JS_ASSIGNMENT_RE = re.compile(r"^\s*(?P<name>[A-Za-z_$][\w$]*)\s*=", re.M)
 JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 JS_KEYWORDS = {
     "if",
@@ -126,6 +131,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         )
         class_methods = _local_javascript_class_methods(rel, text, local_functions)
         known_classes = {class_name for class_name, _method_name in class_methods}
+        object_method_targets = _local_javascript_object_method_targets(text, local_functions)
         for index, match in enumerate(matches):
             name = _javascript_function_name(match)
             if not name or name in JS_KEYWORDS:
@@ -162,6 +168,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                         or _local_javascript_member_call_target(call, local_functions)
                         or _javascript_instance_method_call_target(call, instance_aliases, class_methods)
                         or _javascript_class_method_call_target(call, known_classes, class_methods)
+                        or object_method_targets.get(call)
                         or imported_functions.get(call)
                     )
                 if not target_id:
@@ -220,6 +227,27 @@ def _local_javascript_class_methods(
         if function_id and class_counts.get(class_name) == 1:
             methods[(class_name, method_name)] = function_id
     return methods
+
+
+def _local_javascript_object_method_targets(text: str, local_functions: dict[str, str]) -> dict[str, str]:
+    targets: dict[str, str] = {}
+    for match in JS_CONST_OBJECT_LITERAL_RE.finditer(text):
+        object_name = match.group("name")
+        if _has_later_javascript_assignment(text, object_name, match.end()):
+            continue
+        object_body = _javascript_braced_block(text, match.end() - 1)
+        if object_body is None:
+            continue
+        for method_match in JS_FUNC_RE.finditer(object_body):
+            method_name = _javascript_function_name(method_match)
+            function_id = local_functions.get(method_name or "")
+            if method_name and function_id:
+                targets[f"{object_name}.{method_name}"] = function_id
+    return targets
+
+
+def _has_later_javascript_assignment(text: str, name: str, start: int) -> bool:
+    return any(match.group("name") == name for match in JS_ASSIGNMENT_RE.finditer(text, start))
 
 
 def _javascript_braced_block(text: str, open_brace_index: int) -> str | None:
