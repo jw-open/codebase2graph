@@ -3506,6 +3506,36 @@ import react from "react";
     assert any(edge["from"] == "file:app.ts" and edge["to"] == "import:typescript:react" for edge in graph["edges"])
 
 
+def test_javascript_entity_graph_extracts_async_functions(tmp_path: Path) -> None:
+    (tmp_path / "helpers.ts").write_text(
+        """
+export async function load() {
+  return 1;
+}
+
+async function localTask() {
+  return load();
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.js").write_text(
+        """
+async function bootstrap() {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(node["id"] == "js:entity:helpers.ts:load" for node in graph["nodes"])
+    assert any(node["id"] == "js:entity:helpers.ts:localTask" for node in graph["nodes"])
+    assert any(node["id"] == "js:entity:app.js:bootstrap" for node in graph["nodes"])
+    assert any(edge["from"] == "file:helpers.ts" and edge["to"] == "js:entity:helpers.ts:load" for edge in graph["edges"])
+
+
 def test_go_entity_graph_extracts_entities_and_resolves_local_imports(tmp_path: Path) -> None:
     (tmp_path / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
     service = tmp_path / "service"

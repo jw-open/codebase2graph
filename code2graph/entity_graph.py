@@ -21,7 +21,11 @@ IMPORT_RE = re.compile(
     r")",
     re.M,
 )
-TS_ENTITY_RE = re.compile(r"^\s*export\s+(?:default\s+)?(?:class|function|interface|type|const)\s+([A-Za-z_$][\w$]*)|^\s*(?:class|function)\s+([A-Za-z_$][\w$]*)", re.M)
+TS_ENTITY_RE = re.compile(
+    r"^\s*export\s+(?:default\s+)?(?:(?:async\s+)?function|class|interface|type|const)\s+([A-Za-z_$][\w$]*)"
+    r"|^\s*(?:(?:async\s+)?function|class)\s+([A-Za-z_$][\w$]*)",
+    re.M,
+)
 GO_ENTITY_RE = re.compile(
     r"^\s*func\s+(?:\((?P<receiver>[^)]+)\)\s*)?(?P<func>[A-Za-z_]\w*)\s*\("
     r"|^\s*type\s+(?P<type>[A-Za-z_]\w*)\s+(?:struct|interface)\b",
