@@ -13,8 +13,10 @@ JAVASCRIPT_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 IMPORT_RE = re.compile(
     r"^\s*(?:"
     r"import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)['\"]"
+    r"|export\s+(?:\*|\{[^}]*\})\s+from\s+['\"]([^'\"]+)['\"]"
     r"|from\s+([\w.]+)\s+import"
     r"|(?:const|let|var)\s+.+?=\s*require\(['\"]([^'\"]+)['\"]\)"
+    r"|(?:const|let|var)\s+.+?=\s*(?:await\s+)?import\(\s*['\"]([^'\"]+)['\"]\s*\)"
     r"|require\(['\"]([^'\"]+)['\"]\)"
     r")",
     re.M,
