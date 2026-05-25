@@ -833,6 +833,62 @@ export function main() {
     )
 
 
+def test_typescript_named_default_import_calls_resolve_to_project_symbols(tmp_path: Path) -> None:
+    (tmp_path / "task.ts").write_text(
+        """
+export default function runTask() {
+  return 1;
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "service.ts").write_text(
+        """
+export default class Service {
+  helper() {
+    return 2;
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { default as run } from "./task";
+import { default as ImportedService } from "./service";
+
+export function main() {
+  run();
+  const service = new ImportedService();
+  service.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:task.ts:runTask"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:class:service.ts:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"js:call:run", "js:call:ImportedService", "js:call:service.helper"}
+        for node in graph["nodes"]
+    )
+
+
 def test_javascript_commonjs_export_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.js").write_text(
         """

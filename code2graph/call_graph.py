@@ -764,7 +764,7 @@ def _imported_javascript_function_ids(
         if not module_keys:
             continue
         _add_default_javascript_import(imported, default_function_index, module_keys, match.group("clause"))
-        _add_named_javascript_imports(imported, function_index, module_keys, match.group("clause"))
+        _add_named_javascript_imports(imported, function_index, default_function_index, module_keys, match.group("clause"))
         _add_namespace_javascript_imports(imported, function_index, module_keys, match.group("clause"))
 
     for match in JS_REQUIRE_RE.finditer(text):
@@ -773,7 +773,7 @@ def _imported_javascript_function_ids(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_imports(imported, function_index, module_keys, binding)
+            _add_named_javascript_imports(imported, function_index, default_function_index, module_keys, binding)
         else:
             _add_bound_default_javascript_import(imported, default_function_index, module_keys, binding)
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
@@ -792,7 +792,7 @@ def _imported_javascript_function_ids(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_imports(imported, function_index, module_keys, binding)
+            _add_named_javascript_imports(imported, function_index, default_function_index, module_keys, binding)
         else:
             _add_module_javascript_imports(imported, function_index, module_keys, binding)
     return imported
@@ -818,7 +818,13 @@ def _imported_javascript_class_methods(
             module_keys,
             match.group("clause"),
         )
-        _add_named_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
+        _add_named_javascript_class_imports(
+            imported,
+            class_method_index,
+            default_class_index,
+            module_keys,
+            match.group("clause"),
+        )
         _add_namespace_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
 
     for match in JS_REQUIRE_RE.finditer(text):
@@ -827,7 +833,13 @@ def _imported_javascript_class_methods(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_class_imports(imported, class_method_index, module_keys, binding)
+            _add_named_javascript_class_imports(
+                imported,
+                class_method_index,
+                default_class_index,
+                module_keys,
+                binding,
+            )
         else:
             _add_module_javascript_class_imports(imported, class_method_index, module_keys, binding)
 
@@ -843,7 +855,13 @@ def _imported_javascript_class_methods(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_class_imports(imported, class_method_index, module_keys, binding)
+            _add_named_javascript_class_imports(
+                imported,
+                class_method_index,
+                default_class_index,
+                module_keys,
+                binding,
+            )
         else:
             _add_module_javascript_class_imports(imported, class_method_index, module_keys, binding)
     return imported
@@ -863,7 +881,13 @@ def _imported_javascript_class_ids(
         if not module_keys:
             continue
         _add_default_javascript_class_id(imported, class_index, default_class_index, module_keys, match.group("clause"))
-        _add_named_javascript_class_ids(imported, class_index, module_keys, match.group("clause"))
+        _add_named_javascript_class_ids(
+            imported,
+            class_index,
+            default_class_index,
+            module_keys,
+            match.group("clause"),
+        )
         _add_namespace_javascript_class_ids(imported, class_index, module_keys, match.group("clause"))
 
     for match in JS_REQUIRE_RE.finditer(text):
@@ -872,7 +896,7 @@ def _imported_javascript_class_ids(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_class_ids(imported, class_index, module_keys, binding)
+            _add_named_javascript_class_ids(imported, class_index, default_class_index, module_keys, binding)
         else:
             _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {binding}")
 
@@ -888,7 +912,7 @@ def _imported_javascript_class_ids(
             continue
         binding = match.group("binding").strip()
         if binding.startswith("{"):
-            _add_named_javascript_class_ids(imported, class_index, module_keys, binding)
+            _add_named_javascript_class_ids(imported, class_index, default_class_index, module_keys, binding)
         else:
             _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {binding}")
     return imported
@@ -913,6 +937,7 @@ def _add_default_javascript_class_id(
 def _add_named_javascript_class_ids(
     imported: dict[str, str],
     class_index: dict[tuple[str, str], set[str]],
+    default_class_index: dict[str, set[str]],
     module_keys: list[str],
     clause: str,
 ) -> None:
@@ -926,7 +951,12 @@ def _add_named_javascript_class_ids(
         parts = re.split(r"\s+as\s+|\s*:\s*", item, maxsplit=1)
         exported_name = parts[0].strip()
         local_name = parts[1].strip() if len(parts) == 2 else exported_name
-        target_id = _unique_javascript_class(class_index, module_keys, exported_name)
+        class_name = (
+            _unique_default_javascript_class(default_class_index, module_keys)
+            if exported_name == "default"
+            else exported_name
+        )
+        target_id = _unique_javascript_class(class_index, module_keys, class_name) if class_name else None
         if target_id:
             imported[local_name] = target_id
 
@@ -951,6 +981,7 @@ def _add_namespace_javascript_class_ids(
 def _add_named_javascript_class_imports(
     imported: dict[tuple[str, str], str],
     class_method_index: dict[tuple[str, str, str], set[str]],
+    default_class_index: dict[str, set[str]],
     module_keys: list[str],
     clause: str,
 ) -> None:
@@ -964,7 +995,13 @@ def _add_named_javascript_class_imports(
         parts = re.split(r"\s+as\s+|\s*:\s*", item, maxsplit=1)
         exported_name = parts[0].strip()
         local_name = parts[1].strip() if len(parts) == 2 else exported_name
-        _add_bound_javascript_class_methods(imported, class_method_index, module_keys, exported_name, local_name)
+        class_name = (
+            _unique_default_javascript_class(default_class_index, module_keys)
+            if exported_name == "default"
+            else exported_name
+        )
+        if class_name:
+            _add_bound_javascript_class_methods(imported, class_method_index, module_keys, class_name, local_name)
 
 
 def _add_default_javascript_class_import(
@@ -1442,6 +1479,7 @@ def _add_bound_default_javascript_import(
 def _add_named_javascript_imports(
     imported: dict[str, str],
     function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
     module_keys: list[str],
     clause: str,
 ) -> None:
@@ -1455,10 +1493,15 @@ def _add_named_javascript_imports(
         parts = re.split(r"\s+as\s+|\s*:\s*", item, maxsplit=1)
         exported_name = parts[0].strip()
         local_name = parts[1].strip() if len(parts) == 2 else exported_name
-        target_id = _unique_javascript_function(function_index, module_keys, exported_name)
+        target_id = (
+            _unique_default_javascript_function(default_function_index, module_keys)
+            if exported_name == "default"
+            else _unique_javascript_function(function_index, module_keys, exported_name)
+        )
         if target_id:
             imported[local_name] = target_id
-        _add_named_javascript_member_imports(imported, function_index, module_keys, exported_name, local_name)
+        if exported_name != "default":
+            _add_named_javascript_member_imports(imported, function_index, module_keys, exported_name, local_name)
 
 
 def _add_named_javascript_member_imports(
