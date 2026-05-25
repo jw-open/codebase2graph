@@ -1199,6 +1199,45 @@ class Controller:
     assert not any(node["id"] == "py:call:self.service.helper" for node in graph["nodes"])
 
 
+def test_python_bound_method_alias_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+    @staticmethod
+    def build():
+        return 2
+
+def main():
+    service = Service()
+    instance_handler = service.helper
+    class_handler = Service.build
+    instance_handler()
+    class_handler()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:method:service.py:Service.build"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"py:call:instance_handler", "py:call:class_handler"}
+        for node in graph["nodes"]
+    )
+
+
 def test_python_inherited_instance_method_calls_resolve_to_base_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """

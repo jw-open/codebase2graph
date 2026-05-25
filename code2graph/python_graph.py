@@ -119,7 +119,13 @@ class PythonCollector(ast.NodeVisitor):
             **enclosing_functions,
             **nested_functions,
         }
-        function_aliases, shadowed_functions = _function_aliases(node, known_functions)
+        known_callables = {
+            **known_functions,
+            **self._method_reference_targets(class_aliases),
+            **self._method_reference_targets(known_classes),
+            **self._method_reference_targets(("self", "cls"), enclosing_class_id),
+        }
+        function_aliases, shadowed_functions = _function_aliases(node, known_callables)
         self.scope.append(func_id)
         for child in _scope_calls(node):
             call_name = _call_name(child.func)
@@ -200,6 +206,23 @@ class PythonCollector(ast.NodeVisitor):
 
     def _class_call_target(self, call_name: str, known_classes: dict[str, str]) -> str | None:
         return known_classes.get(call_name)
+
+    def _method_reference_targets(
+        self,
+        receivers: dict[str, str] | tuple[str, ...],
+        class_id: str | None = None,
+    ) -> dict[str, str]:
+        resolved: dict[str, str] = {}
+        for receiver in receivers:
+            receiver_class_id = class_id
+            if receiver_class_id is None and isinstance(receivers, dict):
+                receiver_class_id = receivers.get(receiver)
+            if not receiver_class_id:
+                continue
+            for (owner_id, method_name), method_id in self.known_methods.items():
+                if owner_id == receiver_class_id:
+                    resolved[f"{receiver}.{method_name}"] = method_id
+        return resolved
 
     def _add_import(self, name: str, line: int) -> None:
         import_id = f"py:import:{name}"
