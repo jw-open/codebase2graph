@@ -703,6 +703,61 @@ func main() {
     assert not any(node["id"] in {"go:call:s.Helper", "go:call:svc.Helper"} for node in graph["nodes"])
 
 
+def test_java_call_graph_resolves_same_class_and_instance_methods(tmp_path: Path) -> None:
+    (tmp_path / "Service.java").write_text(
+        """
+class Service {
+    int helper() {
+        return 1;
+    }
+
+    int run() {
+        return this.helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+class App {
+    void local() {
+    }
+
+    void main() {
+        local();
+        Service service = new Service();
+        service.helper();
+        missing();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "java:method:Service.java:Service.run"
+        and edge["to"] == "java:method:Service.java:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "java:method:App.java:App.main" and edge["to"] == "java:method:App.java:App.local"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "java:method:App.java:App.main"
+        and edge["to"] == "java:method:Service.java:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "java:method:App.java:App.main" and edge["to"] == "java:call:missing"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"java:call:this.helper", "java:call:local", "java:call:service.helper"} for node in graph["nodes"])
+
+
 def test_unresolved_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text(
         """
