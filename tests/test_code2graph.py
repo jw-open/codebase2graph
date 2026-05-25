@@ -2199,6 +2199,38 @@ func main() {
     assert any(node["id"] == "import:go:example.com/app/service" for node in graph["nodes"])
 
 
+def test_rust_entity_imports_resolve_to_local_files(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (tmp_path / "helpers.rs").write_text("pub fn direct() -> i32 { 1 }\n", encoding="utf-8")
+    (nested / "mod.rs").write_text("pub mod worker;\n", encoding="utf-8")
+    (nested / "worker.rs").write_text("pub fn run() -> i32 { 1 }\n", encoding="utf-8")
+    (tmp_path / "main.rs").write_text(
+        """
+mod helpers;
+mod nested;
+
+use helpers::{direct};
+use crate::nested::worker::run;
+
+fn main() {
+    direct();
+    run();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(edge["from"] == "file:main.rs" and edge["to"] == "file:helpers.rs" for edge in graph["edges"])
+    assert any(edge["from"] == "file:main.rs" and edge["to"] == "file:nested/mod.rs" for edge in graph["edges"])
+    assert any(edge["from"] == "file:main.rs" and edge["to"] == "file:nested/worker.rs" for edge in graph["edges"])
+    assert any(edge["from"] == "file:nested/mod.rs" and edge["to"] == "file:nested/worker.rs" for edge in graph["edges"])
+    assert any(node["id"] == "import:rust:helpers" for node in graph["nodes"])
+    assert any(node["id"] == "import:rust:nested::worker" for node in graph["nodes"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """

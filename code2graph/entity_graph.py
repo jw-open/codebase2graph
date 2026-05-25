@@ -46,6 +46,8 @@ RUST_IMPL_RE = re.compile(
     r"^\s*impl(?:\s*<[^>{;]*>)?\s+(?P<type>[A-Za-z_]\w*)[^{;]*\{",
     re.M,
 )
+RUST_MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?P<name>[A-Za-z_]\w*)\s*;", re.M)
+RUST_USE_RE = re.compile(r"^\s*use\s+(?P<path>[^;]+);", re.M)
 
 
 def build_entity_graph(root: Path) -> Graph:
@@ -53,6 +55,7 @@ def build_entity_graph(root: Path) -> Graph:
     python_modules = _python_module_index(root)
     javascript_modules = _javascript_module_index(root)
     go_modules = _go_module_index(root)
+    rust_modules = _rust_module_index(root)
     for path in iter_files(root):
         if path.suffix not in SOURCE_EXTENSIONS:
             continue
@@ -72,7 +75,7 @@ def build_entity_graph(root: Path) -> Graph:
             _add_go_imports(graph, file_id, text, go_modules, _go_module_name(root))
         elif path.suffix == ".rs":
             _add_rust_entities(graph, root, path, text, file_id)
-            _add_imports(graph, text, file_id, language)
+            _add_rust_imports(graph, root, path, text, file_id, rust_modules)
         elif path.suffix == ".py":
             _add_python_imports(graph, root, path, text, file_id, python_modules)
         elif path.suffix not in JAVASCRIPT_EXTENSIONS:
@@ -323,6 +326,87 @@ def _go_module_name(root: Path) -> str:
 def _go_package_key(root: Path, path: Path) -> str:
     parent = path.parent.relative_to(root).as_posix()
     return "" if parent == "." else parent
+
+
+def _add_rust_imports(
+    graph: Graph,
+    root: Path,
+    path: Path,
+    text: str,
+    file_id: str,
+    rust_modules: dict[str, str],
+) -> None:
+    current_module = _rust_module_name(root, path)
+    for match in RUST_MOD_RE.finditer(text):
+        module = _join_rust_module(current_module, match.group("name"))
+        _add_import(graph, file_id, "rust", module)
+        target_id = rust_modules.get(module)
+        if target_id:
+            graph.add_edge(file_id, target_id, "imports")
+
+    for match in RUST_USE_RE.finditer(text):
+        for module in _rust_use_modules(match.group("path"), rust_modules):
+            _add_import(graph, file_id, "rust", module)
+            target_id = rust_modules.get(module)
+            if target_id:
+                graph.add_edge(file_id, target_id, "imports")
+
+
+def _rust_use_modules(path: str, rust_modules: dict[str, str]) -> list[str]:
+    modules: set[str] = set()
+    path = path.strip()
+    brace_match = re.fullmatch(r"(?P<module>.+)::\{(?P<items>[^}]+)\}", path)
+    if brace_match:
+        module = _normal_rust_module_path(brace_match.group("module"))
+        if module in rust_modules:
+            modules.add(module)
+        for item in brace_match.group("items").split(","):
+            item_name = re.split(r"\s+as\s+", item.strip(), maxsplit=1)[0].strip()
+            if item_name and item_name not in {"self", "*"}:
+                nested_module = _join_rust_module(module, item_name)
+                if nested_module in rust_modules:
+                    modules.add(nested_module)
+        return sorted(modules)
+
+    module = _longest_rust_module_prefix(_normal_rust_module_path(path), rust_modules)
+    return [module] if module else []
+
+
+def _longest_rust_module_prefix(path: str, rust_modules: dict[str, str]) -> str | None:
+    parts = [part for part in path.split("::") if part]
+    for end in range(len(parts), 0, -1):
+        candidate = "::".join(parts[:end])
+        if candidate in rust_modules:
+            return candidate
+    return None
+
+
+def _rust_module_index(root: Path) -> dict[str, str]:
+    modules: dict[str, str] = {}
+    for path in iter_files(root):
+        if path.suffix != ".rs":
+            continue
+        modules.setdefault(_rust_module_name(root, path), rel_id("file", root, path))
+    return modules
+
+
+def _rust_module_name(root: Path, path: Path) -> str:
+    rel = path.relative_to(root).with_suffix("")
+    if rel.name in {"main", "lib"} and rel.parent.as_posix() == ".":
+        return ""
+    if rel.name == "mod":
+        parent = rel.parent.as_posix()
+        return "" if parent == "." else parent.replace("/", "::")
+    return rel.as_posix().replace("/", "::")
+
+
+def _normal_rust_module_path(module_path: str) -> str:
+    parts = [part for part in module_path.split("::") if part and part not in {"crate", "self"}]
+    return "::".join(parts)
+
+
+def _join_rust_module(parent: str, child: str) -> str:
+    return "::".join(part for part in [parent, child] if part)
 
 
 def _go_receiver_type(receiver: str | None) -> str | None:
