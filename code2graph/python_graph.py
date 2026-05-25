@@ -557,7 +557,7 @@ def _imported_function_ids_from_body(
     current_is_package: bool = False,
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
-    for node in body:
+    for node in _scope_import_nodes(body):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 module = alias.name
@@ -606,7 +606,7 @@ def _imported_class_ids_from_body(
     current_is_package: bool = False,
 ) -> dict[str, str]:
     imported: dict[str, str] = {}
-    for node in body:
+    for node in _scope_import_nodes(body):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 module = alias.name
@@ -631,6 +631,36 @@ def _imported_class_ids_from_body(
                     imported[local_name] = class_id
                 _add_module_class_aliases(imported, class_index, local_name, f"{module}.{alias.name}")
     return imported
+
+
+class _ScopeImportVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.imports: list[ast.Import | ast.ImportFrom] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.imports.append(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self.imports.append(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+
+def _scope_import_nodes(body: list[ast.stmt]) -> list[ast.Import | ast.ImportFrom]:
+    visitor = _ScopeImportVisitor()
+    for child in body:
+        visitor.visit(child)
+    return visitor.imports
 
 
 def _add_module_function_aliases(
