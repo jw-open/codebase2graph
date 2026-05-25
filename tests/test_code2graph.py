@@ -735,6 +735,47 @@ export function main() {
     assert not any(node["id"] == "js:call:persist" for node in graph["nodes"])
 
 
+def test_typescript_object_property_function_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
+    (tmp_path / "app.ts").write_text(
+        """
+const actions = {
+  save: () => {
+    return 1;
+  },
+  load: function () {
+    return actions.save();
+  },
+};
+
+export function main() {
+  const { load } = actions;
+  actions.save();
+  load();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:load"
+        and edge["to"] == "js:function:app.ts:save"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:app.ts:save"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:app.ts:load"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"js:call:actions.save", "js:call:load"} for node in graph["nodes"])
+
+
 def test_typescript_reassigned_instance_method_calls_remain_placeholders(tmp_path: Path) -> None:
     (tmp_path / "service.ts").write_text(
         """
