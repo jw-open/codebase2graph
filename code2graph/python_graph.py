@@ -16,6 +16,7 @@ class PythonCollector(ast.NodeVisitor):
         local_functions: dict[str, str],
         local_classes: dict[str, str],
         known_methods: dict[tuple[str, str], str],
+        class_bases: dict[str, list[str]],
         imported_functions: dict[str, str],
         imported_classes: dict[str, str],
         module_function_aliases: dict[str, str],
@@ -31,6 +32,7 @@ class PythonCollector(ast.NodeVisitor):
         self.local_functions = local_functions
         self.local_classes = local_classes
         self.known_methods = known_methods
+        self.class_bases = class_bases
         self.imported_functions = imported_functions
         self.imported_classes = imported_classes
         self.module_function_aliases = module_function_aliases
@@ -133,7 +135,8 @@ class PythonCollector(ast.NodeVisitor):
             call_name = _call_name(child.func)
             if call_name:
                 target_id = (
-                    self._method_call_target(call_name, enclosing_class_id)
+                    self._super_method_call_target(child.func, enclosing_class_id)
+                    or self._method_call_target(call_name, enclosing_class_id)
                     or self._instance_method_call_target(call_name, class_aliases)
                     or self._class_method_call_target(call_name, known_classes)
                     or self._class_call_target(call_name, known_classes)
@@ -187,6 +190,19 @@ class PythonCollector(ast.NodeVisitor):
         if receiver not in {"self", "cls"} or not method_name or "." in method_name:
             return None
         return self.known_methods.get((enclosing_class_id, method_name))
+
+    def _super_method_call_target(self, node: ast.AST, enclosing_class_id: str | None) -> str | None:
+        if not enclosing_class_id or not isinstance(node, ast.Attribute):
+            return None
+        if not _is_super_call(node.value):
+            return None
+        return _unique_base_method_target(
+            enclosing_class_id,
+            node.attr,
+            self.known_methods,
+            self.class_bases,
+            set(),
+        )
 
     def _instance_method_call_target(self, call_name: str, class_aliases: dict[str, str]) -> str | None:
         receiver, _, method_name = call_name.rpartition(".")
@@ -262,7 +278,8 @@ def build_python_graph(root: Path) -> Graph:
 
     function_index = _project_function_index(root, parsed_modules)
     class_index = _project_class_index(root, parsed_modules)
-    method_index = _project_method_index(root, parsed_modules, class_index)
+    class_bases = _project_class_base_ids(root, parsed_modules, class_index)
+    method_index = _project_method_index(root, parsed_modules, class_index, class_bases)
     for path, tree in parsed_modules:
         local_functions = _local_function_ids(root, path, tree)
         local_classes = _local_class_ids(root, path, tree)
@@ -290,6 +307,7 @@ def build_python_graph(root: Path) -> Graph:
             local_functions,
             local_classes,
             method_index,
+            class_bases,
             imported_functions,
             imported_classes,
             module_function_aliases,
@@ -387,11 +405,13 @@ def _project_method_index(
     root: Path,
     modules: list[tuple[Path, ast.Module]],
     class_index: dict[tuple[str, str], str],
+    class_bases: dict[str, list[str]] | None = None,
 ) -> dict[tuple[str, str], str]:
     method_index: dict[tuple[str, str], str] = {}
     for path, tree in modules:
         method_index.update(_local_method_ids(root, path, tree))
-    class_bases = _project_class_base_ids(root, modules, class_index)
+    if class_bases is None:
+        class_bases = _project_class_base_ids(root, modules, class_index)
     for class_id in sorted(class_bases):
         _add_inherited_methods(class_id, method_index, class_bases, set())
     return method_index
@@ -448,6 +468,36 @@ def _add_inherited_methods(
                 method_index[(class_id, method_name)] = method_id
                 method_names.add(method_name)
     visiting.remove(class_id)
+
+
+def _unique_base_method_target(
+    class_id: str,
+    method_name: str,
+    method_index: dict[tuple[str, str], str],
+    class_bases: dict[str, list[str]],
+    visiting: set[str],
+) -> str | None:
+    if class_id in visiting:
+        return None
+    visiting.add(class_id)
+    matches: set[str] = set()
+    for base_id in class_bases.get(class_id, []):
+        method_id = method_index.get((base_id, method_name))
+        if method_id:
+            matches.add(method_id)
+        inherited_method_id = _unique_base_method_target(
+            base_id,
+            method_name,
+            method_index,
+            class_bases,
+            visiting,
+        )
+        if inherited_method_id:
+            matches.add(inherited_method_id)
+    visiting.remove(class_id)
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
 
 
 def _imported_function_ids(
@@ -899,6 +949,12 @@ def _class_instantiation_target(node: ast.AST, local_classes: dict[str, str]) ->
     if not call_name:
         return None
     return local_classes.get(call_name)
+
+
+def _is_super_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    return isinstance(node.func, ast.Name) and node.func.id == "super"
 
 
 def _argument_names(args: ast.arguments) -> list[str]:
