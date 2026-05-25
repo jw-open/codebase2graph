@@ -48,6 +48,11 @@ JS_ALIAS_ASSIGN_RE = re.compile(
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
     re.M,
 )
+JS_DESTRUCTURING_ALIAS_DECL_RE = re.compile(
+    r"^\s*(?:const|let|var)\s+\{(?P<body>[^}]+)\}\s*=\s*"
+    r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n]|$)",
+    re.M,
+)
 JS_CLASS_RE = re.compile(r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)[^{]*\{")
 JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
@@ -142,7 +147,7 @@ def _build_javascript_call_graph(root: Path) -> Graph:
             func_id = f"js:function:{rel}:{name}"
             function_aliases, shadowed_functions = _javascript_function_aliases(
                 body,
-                {**local_functions, **imported_functions},
+                {**local_functions, **imported_functions, **object_method_targets},
             )
             instance_aliases = _javascript_instance_aliases(body, known_classes)
             graph.add_node(
@@ -313,6 +318,13 @@ def _javascript_function_aliases(body: str, known_functions: dict[str, str]) -> 
         _record_javascript_alias(assignments, known_functions, match.group("name"), match.group("target"))
     for match in JS_ALIAS_ASSIGN_RE.finditer(body):
         _record_javascript_alias(assignments, known_functions, match.group("name"), match.group("target"))
+    for match in JS_DESTRUCTURING_ALIAS_DECL_RE.finditer(body):
+        _record_javascript_destructuring_aliases(
+            assignments,
+            known_functions,
+            match.group("body"),
+            match.group("target"),
+        )
 
     aliases: dict[str, str] = {}
     for name, target_ids in assignments.items():
@@ -332,6 +344,28 @@ def _record_javascript_alias(
     if name in JS_KEYWORDS:
         return
     assignments.setdefault(name, set()).add(_javascript_reference_target(assignments, known_functions, target))
+
+
+def _record_javascript_destructuring_aliases(
+    assignments: dict[str, set[str | None]],
+    known_functions: dict[str, str],
+    destructuring_body: str,
+    target: str,
+) -> None:
+    for item in destructuring_body.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = re.split(r"\s*:\s*", item, maxsplit=1)
+        property_name = parts[0].strip()
+        local_name = parts[1].strip() if len(parts) == 2 else property_name
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", property_name):
+            continue
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", local_name) or local_name in JS_KEYWORDS:
+            continue
+        assignments.setdefault(local_name, set()).add(
+            _javascript_reference_target(assignments, known_functions, f"{target}.{property_name}")
+        )
 
 
 def _javascript_reference_target(
