@@ -40,6 +40,10 @@ JS_COMMONJS_DEFAULT_EXPORT_RE = re.compile(
     r"^\s*module\.exports\s*=\s*(?P<local>[A-Za-z_$][\w$]*)\s*;?\s*$",
     re.M,
 )
+JS_DEFAULT_EXPORT_REF_RE = re.compile(
+    r"^\s*export\s+default\s+(?P<local>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*;?\s*$",
+    re.M,
+)
 JS_ALIAS_DECL_RE = re.compile(
     r"^\s*(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?P<target>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*(?:[;\n,]|$)",
@@ -516,6 +520,20 @@ def _add_reexported_javascript_function_ids(
                     if function_id not in targets:
                         targets.add(function_id)
                         changed = True
+            default_ref_exports = _local_default_exported_javascript_function_ids(
+                root,
+                path,
+                text,
+                function_index,
+                default_function_index,
+                module_index,
+            )
+            for function_id in default_ref_exports:
+                for module_key in current_module_keys:
+                    targets = default_function_index.setdefault(module_key, set())
+                    if function_id not in targets:
+                        targets.add(function_id)
+                        changed = True
 
 
 def _local_exported_javascript_functions(
@@ -582,6 +600,33 @@ def _commonjs_default_exported_javascript_function_ids(root: Path, path: Path, t
     for match in JS_COMMONJS_DEFAULT_EXPORT_RE.finditer(text):
         local_name = match.group("local")
         target_id = local_functions.get(local_name)
+        if target_id:
+            exported.add(target_id)
+    return exported
+
+
+def _local_default_exported_javascript_function_ids(
+    root: Path,
+    path: Path,
+    text: str,
+    function_index: dict[tuple[str, str], set[str]],
+    default_function_index: dict[str, set[str]],
+    module_index: dict[str, set[Path]],
+) -> set[str]:
+    matches = [
+        match
+        for match in JS_FUNC_RE.finditer(text)
+        if (_javascript_function_name(match) not in JS_KEYWORDS)
+    ]
+    local_functions = _local_javascript_function_ids(path.relative_to(root).as_posix(), matches)
+    known_functions = {
+        **local_functions,
+        **_imported_javascript_function_ids(root, path, text, function_index, default_function_index, module_index),
+        **_local_javascript_object_method_targets(text, local_functions),
+    }
+    exported: set[str] = set()
+    for match in JS_DEFAULT_EXPORT_REF_RE.finditer(text):
+        target_id = known_functions.get(match.group("local"))
         if target_id:
             exported.add(target_id)
     return exported
