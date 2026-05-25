@@ -2032,6 +2032,90 @@ class SyncService : Service()
     assert any(node["id"] == "android:widget:TextView" for node in graph["nodes"])
 
 
+def test_decision_graph_extracts_architecture_tradeoffs(tmp_path: Path) -> None:
+    docs = tmp_path / "docs" / "adr"
+    docs.mkdir(parents=True)
+    (docs / "0001-graph-storage.md").write_text(
+        """
+# Use JSON graph output
+
+## Problem
+
+Users need to inspect code graphs without operating a graph database.
+
+## Options
+
+Option A: write JSON files. Option B: insert directly into Neo4j.
+
+## Pros
+
+JSON files are portable and easy to review.
+
+## Cons
+
+Large JSON files can be slower to query than a graph database.
+
+## Tradeoffs
+
+The tradeoff is repeatable offline generation versus faster online traversal.
+
+## Decision
+
+We will emit deterministic OhWise-compatible JSON and make graph database loading optional.
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "builder.py").write_text(
+        """
+# Decision: keep graph generation deterministic so it does not require an LLM.
+def build():
+    return {}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "decision").to_dict()
+
+    kinds = {node["attributes"].get("kind") for node in graph["nodes"]}
+    assert {
+        "decision_root",
+        "decision_source",
+        "design_problem",
+        "design_option",
+        "design_pro",
+        "design_con",
+        "design_tradeoff",
+        "design_decision",
+    }.issubset(kinds)
+    assert any(edge["label"] == "has_option" for edge in graph["edges"])
+    assert any(edge["label"] == "has_tradeoff" for edge in graph["edges"])
+    assert any(edge["label"] == "resolved_by" for edge in graph["edges"])
+    assert any(
+        node["attributes"].get("source_type") == "code_comment"
+        and "does not require an LLM" in node.get("content", "")
+        for node in graph["nodes"]
+    )
+
+
+def test_all_graph_includes_decision_graph(tmp_path: Path) -> None:
+    (tmp_path / "ARCHITECTURE.md").write_text(
+        """
+# Architecture
+
+## Problem
+The API needs a stable extraction layer.
+
+## Decision
+We use analyzer plugins so each language can evolve independently.
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "all").to_dict()
+
+    assert any(node["attributes"].get("kind") == "design_decision" for node in graph["nodes"])
+
+
 def test_iteration_runner_writes_progress_and_snapshot(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -67,6 +67,7 @@ python -m code2graph /path/to/repo --graph workflow
 python -m code2graph /path/to/repo --graph infra
 python -m code2graph /path/to/repo --graph web
 python -m code2graph /path/to/repo --graph android
+python -m code2graph /path/to/repo --graph decision
 ```
 
 Graph types:
@@ -79,7 +80,18 @@ Graph types:
 - `infra`: service topology, CI/CD pipelines, service-level communication, cloud providers/resources, integrations, and package/runtime dependencies.
 - `web`: Node.js/frontend application graph for React, TypeScript, HTML, CSS, Tailwind utilities, routes, rendered DOM elements, components, hooks, and web framework packages.
 - `android`: Android project graph for Gradle modules/config, manifests, permissions, app components, Kotlin/Java component classes, resources, widgets, and Android dependencies.
+- `decision`: architecture/design decision graph from ADRs, RFCs, design docs, README decision sections, and high-signal source comments. It models problems, options, pros, cons, tradeoffs, consequences, and chosen decisions.
 - `all`: merged multi-layer graph.
+
+## Language Coverage
+
+`code2graph` has broad repository coverage, but not every programming language has the same semantic depth.
+
+- Deepest today: Python AST, JavaScript/TypeScript static extraction, web/frontend project structure, Android project metadata, Docker/Compose/Kubernetes/Terraform/GitHub Actions, generic SQL/schema hints.
+- Partial today: Go call extraction, Java/Kotlin Android component extraction, package/config/dependency detection for many ecosystems.
+- Planned semantic analyzers: Rust, Swift, Java, C, C++, Scala, CUDA, Airflow DAGs, dbt lineage, NoSQL model inference, and graph query languages such as Cypher/SPARQL/Gremlin.
+
+Unsupported or partial languages still appear in folder/entity/dependency graphs when files and configs are present, but deep call/entity resolution requires a dedicated analyzer.
 
 The infra graph currently extracts:
 
