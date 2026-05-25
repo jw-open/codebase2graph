@@ -76,6 +76,7 @@ JS_CLASS_RE = re.compile(
     r"\bclass\s+(?P<name>[A-Za-z_$][\w$]*)"
     r"(?:\s+extends\s+(?P<base>[A-Za-z_$][\w$]*))?[^{]*\{"
 )
+JS_DEFAULT_CLASS_RE = re.compile(r"^\s*export\s+default\s+class\s+(?P<name>[A-Za-z_$][\w$]*)\b", re.M)
 JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
     r"(?P<class>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(",
@@ -120,8 +121,10 @@ def _build_javascript_call_graph(root: Path) -> Graph:
     graph = Graph()
     files: list[tuple[Path, str, str, list[re.Match[str]]]] = []
     function_index: dict[tuple[str, str], set[str]] = {}
+    class_index: dict[tuple[str, str], set[str]] = {}
     class_method_index: dict[tuple[str, str, str], set[str]] = {}
     default_function_index: dict[str, set[str]] = {}
+    default_class_index: dict[str, set[str]] = {}
     module_index: dict[str, set[Path]] = {}
     for path in iter_files(root):
         if path.suffix not in JS_EXTENSIONS:
@@ -137,6 +140,9 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         for module_key in _javascript_module_keys(root, path):
             module_index.setdefault(module_key, set()).add(path)
         local_functions = _local_javascript_function_ids(rel, matches)
+        for class_name, class_id in _local_javascript_class_ids(rel, text).items():
+            for module_key in _javascript_module_keys(root, path):
+                class_index.setdefault((module_key, class_name), set()).add(class_id)
         object_method_targets = _local_javascript_object_method_targets(text, local_functions)
         for name, function_id in {**local_functions, **object_method_targets}.items():
             for module_key in _javascript_module_keys(root, path):
@@ -148,6 +154,9 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         ).items():
             for module_key in _javascript_module_keys(root, path):
                 class_method_index.setdefault((module_key, class_name, method_name), set()).add(function_id)
+        for class_name in _default_javascript_class_names(text):
+            for module_key in _javascript_module_keys(root, path):
+                default_class_index.setdefault(module_key, set()).add(class_name)
         for name, function_id in _default_javascript_function_ids(rel, matches).items():
             for module_key in _javascript_module_keys(root, path):
                 default_function_index.setdefault(module_key, set()).add(function_id)
@@ -169,10 +178,27 @@ def _build_javascript_call_graph(root: Path) -> Graph:
         )
         class_methods = {
             **_local_javascript_class_methods(rel, text, local_functions),
-            **_imported_javascript_class_methods(root, path, text, class_method_index, module_index),
+            **_imported_javascript_class_methods(
+                root,
+                path,
+                text,
+                class_method_index,
+                default_class_index,
+                module_index,
+            ),
         }
         known_classes = {class_name for class_name, _method_name in class_methods}
-        known_class_targets = {class_name: class_id for class_name, class_id in local_classes.items()}
+        known_class_targets = {
+            **local_classes,
+            **_imported_javascript_class_ids(
+                root,
+                path,
+                text,
+                class_index,
+                default_class_index,
+                module_index,
+            ),
+        }
         class_bases = _local_javascript_class_bases(text, known_classes)
         method_owners = {
             function_id: class_name
@@ -272,6 +298,10 @@ def _unique_javascript_class_match(text: str, name: str) -> re.Match[str] | None
     if len(matches) == 1:
         return matches[0]
     return None
+
+
+def _default_javascript_class_names(text: str) -> set[str]:
+    return {match.group("name") for match in JS_DEFAULT_CLASS_RE.finditer(text)}
 
 
 def _javascript_function_name(match: re.Match[str]) -> str | None:
@@ -607,6 +637,7 @@ def _imported_javascript_class_methods(
     path: Path,
     text: str,
     class_method_index: dict[tuple[str, str, str], set[str]],
+    default_class_index: dict[str, set[str]],
     module_index: dict[str, set[Path]],
 ) -> dict[tuple[str, str], str]:
     imported: dict[tuple[str, str], str] = {}
@@ -614,6 +645,13 @@ def _imported_javascript_class_methods(
         module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
         if not module_keys:
             continue
+        _add_default_javascript_class_import(
+            imported,
+            class_method_index,
+            default_class_index,
+            module_keys,
+            match.group("clause"),
+        )
         _add_named_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
         _add_namespace_javascript_class_imports(imported, class_method_index, module_keys, match.group("clause"))
 
@@ -639,6 +677,99 @@ def _imported_javascript_class_methods(
     return imported
 
 
+def _imported_javascript_class_ids(
+    root: Path,
+    path: Path,
+    text: str,
+    class_index: dict[tuple[str, str], set[str]],
+    default_class_index: dict[str, set[str]],
+    module_index: dict[str, set[Path]],
+) -> dict[str, str]:
+    imported: dict[str, str] = {}
+    for match in JS_IMPORT_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        _add_default_javascript_class_id(imported, class_index, default_class_index, module_keys, match.group("clause"))
+        _add_named_javascript_class_ids(imported, class_index, module_keys, match.group("clause"))
+        _add_namespace_javascript_class_ids(imported, class_index, module_keys, match.group("clause"))
+
+    for match in JS_REQUIRE_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        if binding.startswith("{"):
+            _add_named_javascript_class_ids(imported, class_index, module_keys, binding)
+        else:
+            _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {binding}")
+
+    for match in JS_DYNAMIC_IMPORT_RE.finditer(text):
+        module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+        if not module_keys:
+            continue
+        binding = match.group("binding").strip()
+        if binding.startswith("{"):
+            _add_named_javascript_class_ids(imported, class_index, module_keys, binding)
+        else:
+            _add_namespace_javascript_class_ids(imported, class_index, module_keys, f"* as {binding}")
+    return imported
+
+
+def _add_default_javascript_class_id(
+    imported: dict[str, str],
+    class_index: dict[tuple[str, str], set[str]],
+    default_class_index: dict[str, set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    default_match = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)", clause)
+    if not default_match:
+        return
+    class_name = _unique_default_javascript_class(default_class_index, module_keys)
+    target_id = _unique_javascript_class(class_index, module_keys, class_name) if class_name else None
+    if target_id:
+        imported[default_match.group(1)] = target_id
+
+
+def _add_named_javascript_class_ids(
+    imported: dict[str, str],
+    class_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    named_match = re.search(r"\{(?P<named>[^}]+)\}", clause)
+    if not named_match:
+        return
+    for item in named_match.group("named").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = re.split(r"\s+as\s+|\s*:\s*", item, maxsplit=1)
+        exported_name = parts[0].strip()
+        local_name = parts[1].strip() if len(parts) == 2 else exported_name
+        target_id = _unique_javascript_class(class_index, module_keys, exported_name)
+        if target_id:
+            imported[local_name] = target_id
+
+
+def _add_namespace_javascript_class_ids(
+    imported: dict[str, str],
+    class_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    namespace_match = re.search(r"\*\s+as\s+([A-Za-z_$][\w$]*)", clause)
+    if not namespace_match:
+        return
+    local_name = namespace_match.group(1)
+    class_names = {class_name for module_key, class_name in class_index if module_key in module_keys}
+    for class_name in class_names:
+        target_id = _unique_javascript_class(class_index, module_keys, class_name)
+        if target_id:
+            imported[f"{local_name}.{class_name}"] = target_id
+
+
 def _add_named_javascript_class_imports(
     imported: dict[tuple[str, str], str],
     class_method_index: dict[tuple[str, str, str], set[str]],
@@ -656,6 +787,27 @@ def _add_named_javascript_class_imports(
         exported_name = parts[0].strip()
         local_name = parts[1].strip() if len(parts) == 2 else exported_name
         _add_bound_javascript_class_methods(imported, class_method_index, module_keys, exported_name, local_name)
+
+
+def _add_default_javascript_class_import(
+    imported: dict[tuple[str, str], str],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    default_class_index: dict[str, set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> None:
+    default_match = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)", clause)
+    if not default_match:
+        return
+    class_name = _unique_default_javascript_class(default_class_index, module_keys)
+    if class_name:
+        _add_bound_javascript_class_methods(
+            imported,
+            class_method_index,
+            module_keys,
+            class_name,
+            default_match.group(1),
+        )
 
 
 def _add_namespace_javascript_class_imports(
@@ -717,6 +869,31 @@ def _unique_javascript_class_method(
     matches: set[str] = set()
     for module_key in module_keys:
         matches.update(class_method_index.get((module_key, class_name, method_name), set()))
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
+def _unique_javascript_class(
+    class_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+    name: str,
+) -> str | None:
+    matches: set[str] = set()
+    for module_key in module_keys:
+        matches.update(class_index.get((module_key, name), set()))
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
+def _unique_default_javascript_class(
+    default_class_index: dict[str, set[str]],
+    module_keys: list[str],
+) -> str | None:
+    matches: set[str] = set()
+    for module_key in module_keys:
+        matches.update(default_class_index.get(module_key, set()))
     if len(matches) == 1:
         return next(iter(matches))
     return None
