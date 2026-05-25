@@ -20,6 +20,7 @@ class PythonCollector(ast.NodeVisitor):
         imported_classes: dict[str, str],
         module_function_aliases: dict[str, str],
         module_class_aliases: dict[str, str],
+        module_instance_aliases: dict[str, str],
         function_index: dict[tuple[str, str], str],
         class_index: dict[tuple[str, str], str],
     ) -> None:
@@ -34,6 +35,7 @@ class PythonCollector(ast.NodeVisitor):
         self.imported_classes = imported_classes
         self.module_function_aliases = module_function_aliases
         self.module_class_aliases = module_class_aliases
+        self.module_instance_aliases = module_instance_aliases
         self.function_index = function_index
         self.class_index = class_index
         self.current_module = _module_name(root, path)
@@ -108,7 +110,7 @@ class PythonCollector(ast.NodeVisitor):
             **self.local_classes,
             **scoped_imported_classes,
         }
-        class_aliases = _function_class_aliases(node, known_classes)
+        class_aliases = {**self.module_instance_aliases, **_function_class_aliases(node, known_classes)}
         nested_functions = self._nested_function_ids(node)
         enclosing_functions = _merge_scopes(self.lexical_function_scopes)
         known_functions = {
@@ -276,6 +278,11 @@ def build_python_graph(root: Path) -> Graph:
             {**imported_classes, **local_classes},
             reserved=set(local_classes),
         )
+        module_instance_aliases = _module_instance_aliases(
+            tree.body,
+            {**imported_classes, **module_class_aliases, **local_classes},
+            reserved={*imported_classes, *module_class_aliases, *local_classes},
+        )
         PythonCollector(
             root,
             path,
@@ -287,6 +294,7 @@ def build_python_graph(root: Path) -> Graph:
             imported_classes,
             module_function_aliases,
             module_class_aliases,
+            module_instance_aliases,
             function_index,
             class_index,
         ).visit(tree)
@@ -679,9 +687,19 @@ def _module_class_aliases(
     return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
 
 
+def _module_instance_aliases(
+    body: list[ast.stmt],
+    known_classes: dict[str, str],
+    *,
+    reserved: set[str],
+) -> dict[str, str]:
+    aliases, shadowed = _aliases_from_body(body, _ClassAliasVisitor(known_classes))
+    return {name: target for name, target in aliases.items() if name not in reserved and name in shadowed}
+
+
 def _aliases_from_body(
     body: list[ast.stmt],
-    visitor: _FunctionAliasVisitor | _ClassAliasReferenceVisitor,
+    visitor: _FunctionAliasVisitor | _ClassAliasVisitor | _ClassAliasReferenceVisitor,
 ) -> tuple[dict[str, str], set[str]]:
     for child in body:
         visitor.visit(child)

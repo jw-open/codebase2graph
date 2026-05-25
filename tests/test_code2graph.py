@@ -1535,6 +1535,87 @@ def method():
     assert not any(node["id"] in {"py:call:Worker", "py:call:worker.helper"} for node in graph["nodes"])
 
 
+def test_python_module_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import service
+from service import Service
+
+direct_worker = Service()
+qualified_worker = service.Service()
+
+def direct():
+    return direct_worker.helper()
+
+def qualified():
+    return qualified_worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:direct"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:qualified"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"py:call:direct_worker.helper", "py:call:qualified_worker.helper"}
+        for node in graph["nodes"]
+    )
+
+
+def test_python_reassigned_module_instance_calls_remain_placeholder_targets(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class First:
+    def helper(self):
+        return 1
+
+class Second:
+    def helper(self):
+        return 2
+
+worker = First()
+worker = Second()
+
+def main():
+    return worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] == "py:call:worker.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "py:function:service.py:main"
+        and edge["to"] in {
+            "py:method:service.py:First.helper",
+            "py:method:service.py:Second.helper",
+        }
+        for edge in graph["edges"]
+    )
+
+
 def test_python_function_local_imported_class_calls_resolve_to_methods(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """
