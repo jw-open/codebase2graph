@@ -2617,6 +2617,46 @@ def main():
     assert not any(node["id"] in {"py:call:local_alias", "py:call:imported_alias"} for node in graph["nodes"])
 
 
+def test_python_decorator_calls_resolve_to_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "decorators.py").write_text(
+        """
+def trace(fn):
+    return fn
+
+def factory():
+    return trace
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+import decorators
+from decorators import trace as mark
+
+@mark
+def direct():
+    return 1
+
+@decorators.factory()
+def qualified():
+    return 2
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:direct" and edge["to"] == "py:function:decorators.py:trace"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "py:function:app.py:qualified" and edge["to"] == "py:function:decorators.py:factory"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] in {"py:call:mark", "py:call:decorators.factory"} for node in graph["nodes"])
+
+
 def test_python_partial_function_alias_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "helpers.py").write_text(
         """

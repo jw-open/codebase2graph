@@ -153,6 +153,13 @@ class PythonCollector(ast.NodeVisitor):
             partial_names=self.module_partial_names | _functools_partial_names(node.body),
         )
         self.scope.append(func_id)
+        for decorator in node.decorator_list:
+            decorator_name = _decorator_reference_name(decorator)
+            if not decorator_name:
+                continue
+            target_id = known_callables.get(decorator_name) or resolvable_classes.get(decorator_name)
+            if target_id and target_id != func_id:
+                self.graph.add_edge(func_id, target_id, "calls")
         for child in _scope_calls(node):
             call_name = _call_name(child.func)
             if call_name:
@@ -1321,3 +1328,9 @@ def _call_name(node: ast.AST) -> str | None:
         base = _call_name(node.value)
         return f"{base}.{node.attr}" if base else node.attr
     return None
+
+
+def _decorator_reference_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Call):
+        return _call_name(node.func)
+    return _call_name(node)
