@@ -3349,6 +3349,40 @@ def qualified():
     assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
 
 
+def test_python_factory_return_variable_instance_method_calls_resolve_to_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text(
+        """
+class Service:
+    def helper(self):
+        return 1
+
+def build_service():
+    worker = Service()
+    return worker
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        """
+from service import build_service
+
+def main():
+    worker = build_service()
+    return worker.helper()
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "py:function:app.py:main"
+        and edge["to"] == "py:method:service.py:Service.helper"
+        for edge in graph["edges"]
+    )
+    assert not any(node["id"] == "py:call:worker.helper" for node in graph["nodes"])
+
+
 def test_python_reassigned_module_instance_calls_remain_placeholder_targets(tmp_path: Path) -> None:
     (tmp_path / "service.py").write_text(
         """

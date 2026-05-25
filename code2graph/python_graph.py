@@ -524,7 +524,8 @@ def _function_return_class_id(
     known_classes: dict[str, str],
 ) -> str | None:
     annotation_id = _annotation_class_id(node.returns, known_classes)
-    returned_ids = _returned_class_ids(node, known_classes)
+    class_aliases = _function_class_aliases(node, known_classes)
+    returned_ids = _returned_class_ids(node, known_classes, class_aliases)
     if annotation_id:
         return annotation_id if returned_ids == {annotation_id} else None
     if len(returned_ids) == 1:
@@ -545,8 +546,9 @@ def _annotation_class_id(node: ast.AST | None, known_classes: dict[str, str]) ->
 def _returned_class_ids(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     known_classes: dict[str, str],
+    class_aliases: dict[str, str] | None = None,
 ) -> set[str]:
-    visitor = _ReturnClassVisitor(known_classes)
+    visitor = _ReturnClassVisitor(known_classes, class_aliases or {})
     for child in node.body:
         visitor.visit(child)
     return visitor.class_ids
@@ -1151,8 +1153,9 @@ class _ClassAliasReferenceVisitor(_FunctionAliasVisitor):
 
 
 class _ReturnClassVisitor(ast.NodeVisitor):
-    def __init__(self, known_classes: dict[str, str]) -> None:
+    def __init__(self, known_classes: dict[str, str], class_aliases: dict[str, str]) -> None:
         self.known_classes = known_classes
+        self.class_aliases = class_aliases
         self.class_ids: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -1171,7 +1174,11 @@ class _ReturnClassVisitor(ast.NodeVisitor):
         if node.value is None:
             self.class_ids.add("")
             return
-        class_id = _class_instantiation_target(node.value, self.known_classes)
+        return_name = _call_name(node.value)
+        class_id = (
+            self.class_aliases.get(return_name or "")
+            or _class_instantiation_target(node.value, self.known_classes)
+        )
         self.class_ids.add(class_id or "")
         self.generic_visit(node.value)
 
