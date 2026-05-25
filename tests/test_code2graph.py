@@ -549,6 +549,55 @@ export function main() {
     assert not any(node["id"] == "js:call:execute" for node in graph["nodes"])
 
 
+def test_typescript_reexported_class_calls_resolve_to_project_methods(tmp_path: Path) -> None:
+    (tmp_path / "service.ts").write_text(
+        """
+export class Service {
+  helper() {
+    return 1;
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "index.ts").write_text(
+        """
+export { Service as Worker } from "./service";
+export * from "./service";
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        """
+import { Service, Worker } from "./index";
+
+export function main() {
+  const direct = new Service();
+  const renamed = new Worker();
+  direct.helper();
+  renamed.helper();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:class:service.ts:Service"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:service.ts:helper"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        node["id"] in {"js:call:Service", "js:call:Worker", "js:call:direct.helper", "js:call:renamed.helper"}
+        for node in graph["nodes"]
+    )
+
+
 def test_typescript_local_default_export_list_calls_resolve_to_project_functions(tmp_path: Path) -> None:
     (tmp_path / "index.ts").write_text(
         """

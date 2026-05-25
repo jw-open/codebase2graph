@@ -166,6 +166,14 @@ def _build_javascript_call_graph(root: Path) -> Graph:
                 default_function_index.setdefault(module_key, set()).add(function_id)
 
     _add_reexported_javascript_function_ids(root, files, function_index, default_function_index, module_index)
+    _add_reexported_javascript_class_ids(
+        root,
+        files,
+        class_index,
+        class_method_index,
+        default_class_index,
+        module_index,
+    )
 
     for path, rel, text, matches in files:
         file_id = rel_id("file", root, path)
@@ -1126,6 +1134,127 @@ def _add_reexported_javascript_function_ids(
                     if function_id not in targets:
                         targets.add(function_id)
                         changed = True
+
+
+def _add_reexported_javascript_class_ids(
+    root: Path,
+    files: list[tuple[Path, str, str, list[re.Match[str]]]],
+    class_index: dict[tuple[str, str], set[str]],
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    default_class_index: dict[str, set[str]],
+    module_index: dict[str, set[Path]],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for path, _rel, text, _matches in files:
+            current_module_keys = _javascript_module_keys(root, path)
+            for match in JS_REEXPORT_RE.finditer(text):
+                target_module_keys = _resolve_javascript_module_keys(root, path, match.group("module"), module_index)
+                if not target_module_keys:
+                    continue
+                clause = match.group("clause")
+                additions = (
+                    _star_reexported_javascript_classes(class_index, target_module_keys)
+                    if clause == "*"
+                    else _named_reexported_javascript_classes(
+                        class_index,
+                        default_class_index,
+                        target_module_keys,
+                        clause,
+                    )
+                )
+                for exported_name, source_class_name in additions.items():
+                    target_id = _unique_javascript_class(class_index, target_module_keys, source_class_name)
+                    if not target_id:
+                        continue
+                    for module_key in current_module_keys:
+                        targets = class_index.setdefault((module_key, exported_name), set())
+                        if target_id not in targets:
+                            targets.add(target_id)
+                            changed = True
+                        if exported_name == "default":
+                            default_targets = default_class_index.setdefault(module_key, set())
+                            if exported_name not in default_targets:
+                                default_targets.add(exported_name)
+                                changed = True
+                        if _add_reexported_javascript_class_methods(
+                            class_method_index,
+                            target_module_keys,
+                            source_class_name,
+                            module_key,
+                            exported_name,
+                        ):
+                            changed = True
+
+
+def _add_reexported_javascript_class_methods(
+    class_method_index: dict[tuple[str, str, str], set[str]],
+    target_module_keys: list[str],
+    source_class_name: str,
+    current_module_key: str,
+    exported_name: str,
+) -> bool:
+    changed = False
+    method_names = {
+        method_name
+        for module_key, class_name, method_name in class_method_index
+        if module_key in target_module_keys and class_name == source_class_name
+    }
+    for method_name in method_names:
+        target_id = _unique_javascript_class_method(
+            class_method_index,
+            target_module_keys,
+            source_class_name,
+            method_name,
+        )
+        if not target_id:
+            continue
+        targets = class_method_index.setdefault((current_module_key, exported_name, method_name), set())
+        if target_id not in targets:
+            targets.add(target_id)
+            changed = True
+    return changed
+
+
+def _named_reexported_javascript_classes(
+    class_index: dict[tuple[str, str], set[str]],
+    default_class_index: dict[str, set[str]],
+    module_keys: list[str],
+    clause: str,
+) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    named_match = re.search(r"\{(?P<named>[^}]+)\}", clause)
+    if not named_match:
+        return exported
+    for item in named_match.group("named").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = re.split(r"\s+as\s+", item, maxsplit=1)
+        imported_name = parts[0].strip()
+        exported_name = parts[1].strip() if len(parts) == 2 else imported_name
+        source_class_name = (
+            _unique_default_javascript_class(default_class_index, module_keys)
+            if imported_name == "default"
+            else imported_name
+        )
+        if source_class_name and _unique_javascript_class(class_index, module_keys, source_class_name):
+            exported[exported_name] = source_class_name
+    return exported
+
+
+def _star_reexported_javascript_classes(
+    class_index: dict[tuple[str, str], set[str]],
+    module_keys: list[str],
+) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    class_names = {class_name for module_key, class_name in class_index if module_key in module_keys}
+    for class_name in class_names:
+        target_id = _unique_javascript_class(class_index, module_keys, class_name)
+        if target_id:
+            exported[class_name] = class_name
+    return exported
 
 
 def _local_exported_javascript_functions(
