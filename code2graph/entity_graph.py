@@ -48,6 +48,22 @@ RUST_IMPL_RE = re.compile(
 )
 RUST_MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?P<name>[A-Za-z_]\w*)\s*;", re.M)
 RUST_USE_RE = re.compile(r"^\s*use\s+(?P<path>[^;]+);", re.M)
+JAVA_TYPE_RE = re.compile(
+    r"^\s*(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed)\s+)*"
+    r"(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_]\w*)[^{;]*\{",
+    re.M,
+)
+JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+(?P<package>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.M)
+JAVA_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?P<static>static\s+)?(?P<target>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.\*)?)\s*;",
+    re.M,
+)
+JAVA_METHOD_RE = re.compile(
+    r"^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp|default)\s+)*"
+    r"(?:(?:<[^>{;]+>\s*)?(?P<return>[A-Za-z_]\w*(?:[<>\[\].?,\s]+[A-Za-z_]\w*)*)\s+)?"
+    r"(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{",
+    re.M,
+)
 
 
 def build_entity_graph(root: Path) -> Graph:
@@ -56,6 +72,7 @@ def build_entity_graph(root: Path) -> Graph:
     javascript_modules = _javascript_module_index(root)
     go_modules = _go_module_index(root)
     rust_modules = _rust_module_index(root)
+    java_types, java_packages = _java_type_indexes(root)
     for path in iter_files(root):
         if path.suffix not in SOURCE_EXTENSIONS:
             continue
@@ -76,6 +93,9 @@ def build_entity_graph(root: Path) -> Graph:
         elif path.suffix == ".rs":
             _add_rust_entities(graph, root, path, text, file_id)
             _add_rust_imports(graph, root, path, text, file_id, rust_modules)
+        elif path.suffix == ".java":
+            _add_java_entities(graph, root, path, text, file_id)
+            _add_java_imports(graph, file_id, text, java_types, java_packages)
         elif path.suffix == ".py":
             _add_python_imports(graph, root, path, text, file_id, python_modules)
         elif path.suffix not in JAVASCRIPT_EXTENSIONS:
@@ -157,6 +177,37 @@ def _add_rust_entities(graph: Graph, root: Path, path: Path, text: str, file_id:
         function_id = f"rust:function:{rel}:{name}"
         graph.add_node(function_id, name, attributes={"kind": "function", "language": "rust", "path": rel})
         graph.add_edge(file_id, function_id, "defines")
+
+
+def _add_java_entities(graph: Graph, root: Path, path: Path, text: str, file_id: str) -> None:
+    rel = path.relative_to(root).as_posix()
+    for type_match in JAVA_TYPE_RE.finditer(text):
+        type_name = type_match.group("name")
+        entity_id = f"java:entity:{rel}:{type_name}"
+        graph.add_node(entity_id, type_name, attributes={"kind": "entity", "language": "java", "path": rel})
+        graph.add_edge(file_id, entity_id, "defines")
+
+        class_body_start = type_match.end() - 1
+        class_body = _braced_block(text, class_body_start)
+        if class_body is None:
+            continue
+        class_offset = class_body_start + 1
+        for method_match in JAVA_METHOD_RE.finditer(class_body):
+            method_name = method_match.group("name")
+            if method_match.group("return") is None and method_name != type_name:
+                continue
+            method_id = f"java:method:{rel}:{type_name}.{method_name}"
+            graph.add_node(
+                method_id,
+                f"{type_name}.{method_name}",
+                attributes={
+                    "kind": "method",
+                    "language": "java",
+                    "path": rel,
+                    "line": str(text.count("\n", 0, class_offset + method_match.start()) + 1),
+                },
+            )
+            graph.add_edge(file_id, method_id, "defines")
 
 
 def _add_imports(graph: Graph, text: str, file_id: str, language: str) -> None:
@@ -350,6 +401,68 @@ def _add_rust_imports(
             target_id = rust_modules.get(module)
             if target_id:
                 graph.add_edge(file_id, target_id, "imports")
+
+
+def _add_java_imports(
+    graph: Graph,
+    file_id: str,
+    text: str,
+    java_types: dict[str, str],
+    java_packages: dict[str, set[str]],
+) -> None:
+    for match in JAVA_IMPORT_RE.finditer(text):
+        target = match.group("target")
+        _add_import(graph, file_id, "java", target)
+        for target_id in _resolve_java_import(target, bool(match.group("static")), java_types, java_packages):
+            graph.add_edge(file_id, target_id, "imports")
+
+
+def _resolve_java_import(
+    target: str,
+    is_static: bool,
+    java_types: dict[str, str],
+    java_packages: dict[str, set[str]],
+) -> list[str]:
+    if target.endswith(".*"):
+        owner = target[:-2]
+        if is_static:
+            target_id = java_types.get(owner)
+            return [target_id] if target_id else []
+        return sorted(java_packages.get(owner, set()))
+
+    target_id = java_types.get(target)
+    if target_id:
+        return [target_id]
+    if is_static:
+        owner, _, _member = target.rpartition(".")
+        target_id = java_types.get(owner)
+        if target_id:
+            return [target_id]
+    return []
+
+
+def _java_type_indexes(root: Path) -> tuple[dict[str, str], dict[str, set[str]]]:
+    types: dict[str, str] = {}
+    packages: dict[str, set[str]] = {}
+    for path in iter_files(root):
+        if path.suffix != ".java":
+            continue
+        text = read_text(path)
+        package_name = _java_package(text)
+        file_id = rel_id("file", root, path)
+        for type_match in JAVA_TYPE_RE.finditer(text):
+            type_name = type_match.group("name")
+            qualified_name = ".".join(part for part in [package_name, type_name] if part)
+            if qualified_name:
+                types.setdefault(qualified_name, file_id)
+            if package_name:
+                packages.setdefault(package_name, set()).add(file_id)
+    return types, packages
+
+
+def _java_package(text: str) -> str:
+    match = JAVA_PACKAGE_RE.search(text)
+    return match.group("package") if match else ""
 
 
 def _rust_use_modules(path: str, rust_modules: dict[str, str]) -> list[str]:

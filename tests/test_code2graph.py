@@ -2836,6 +2836,65 @@ fn main() {
     assert any(node["id"] == "import:rust:nested::worker" for node in graph["nodes"])
 
 
+def test_java_entity_graph_extracts_entities_and_resolves_local_imports(tmp_path: Path) -> None:
+    package_a = tmp_path / "a"
+    package_b = tmp_path / "b"
+    package_a.mkdir()
+    package_b.mkdir()
+    (package_a / "Service.java").write_text(
+        """
+package a;
+
+public class Service {
+    public int run() {
+        return 1;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (package_b / "Util.java").write_text(
+        """
+package b;
+
+public class Util {
+    public static int helper() {
+        return 2;
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "App.java").write_text(
+        """
+import a.Service;
+import b.*;
+import static b.Util.helper;
+
+class App {
+    void main() {
+        Service service = new Service();
+        service.run();
+        helper();
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "entity").to_dict()
+
+    assert any(node["id"] == "java:entity:a/Service.java:Service" for node in graph["nodes"])
+    assert any(node["id"] == "java:method:a/Service.java:Service.run" for node in graph["nodes"])
+    assert any(node["id"] == "java:entity:b/Util.java:Util" for node in graph["nodes"])
+    assert any(node["id"] == "java:method:b/Util.java:Util.helper" for node in graph["nodes"])
+    assert any(edge["from"] == "file:App.java" and edge["to"] == "file:a/Service.java" for edge in graph["edges"])
+    assert any(edge["from"] == "file:App.java" and edge["to"] == "file:b/Util.java" for edge in graph["edges"])
+    assert any(node["id"] == "import:java:a.Service" for node in graph["nodes"])
+    assert any(node["id"] == "import:java:b.*" for node in graph["nodes"])
+    assert any(node["id"] == "import:java:b.Util.helper" for node in graph["nodes"])
+
+
 def test_schema_graph_from_sql(tmp_path: Path) -> None:
     (tmp_path / "schema.sql").write_text(
         """
