@@ -548,7 +548,7 @@ def _javascript_reference_target(
 
 
 def _javascript_parameter_names(body: str) -> set[str]:
-    header = body.split("{", 1)[0]
+    header = _javascript_signature_header(body)
     params: str | None = None
     arrow_match = re.search(
         r"(?:=|\()\s*(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\s*(?:<[^>{}\n;=]*>)?\s*\(\s*)*"
@@ -568,13 +568,132 @@ def _javascript_parameter_names(body: str) -> set[str]:
     if not params:
         return set()
     names: set[str] = set()
-    for part in params.split(","):
-        if not re.match(r"^\s*\.{0,3}[A-Za-z_$][\w$]*(?:\s*:\s*[^=]+)?(?:\s*=.*)?$", part):
-            continue
-        name = part.strip().lstrip(".").split("=", 1)[0].split(":", 1)[0].strip()
-        if name:
-            names.add(name)
+    for part in _split_javascript_bindings(params):
+        names.update(_javascript_binding_names(part))
     return names
+
+
+def _javascript_signature_header(body: str) -> str:
+    arrow_index = body.find("=>")
+    if arrow_index >= 0:
+        return body[: arrow_index + 2]
+    body_start = _javascript_function_body_start(body)
+    return body[:body_start] if body_start is not None else body
+
+
+def _javascript_function_body_start(body: str) -> int | None:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    for index, char in enumerate(body):
+        if char == "(":
+            paren_depth += 1
+        elif char == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif char == "[":
+            bracket_depth += 1
+        elif char == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif char == "{":
+            if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+                return index
+            brace_depth += 1
+        elif char == "}":
+            brace_depth = max(0, brace_depth - 1)
+    return None
+
+
+def _split_javascript_bindings(text: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    parts.append(text[start:].strip())
+    return [part for part in parts if part]
+
+
+def _javascript_binding_names(text: str) -> set[str]:
+    binding = _strip_javascript_default(text.strip().lstrip("."))
+    if not binding:
+        return set()
+    if binding.startswith("{"):
+        object_body, rest = _javascript_balanced_binding_body(binding, "{", "}")
+        if object_body is None:
+            return set()
+        names = set()
+        for item in _split_javascript_bindings(object_body):
+            item = _strip_javascript_default(item.strip().lstrip("."))
+            if not item:
+                continue
+            name, value = _split_javascript_top_level_colon(item)
+            if value is None:
+                names.update(_javascript_binding_names(name))
+            else:
+                names.update(_javascript_binding_names(value))
+        if not names and rest:
+            names.update(_javascript_binding_names(rest))
+        return names
+    if binding.startswith("["):
+        array_body, _rest = _javascript_balanced_binding_body(binding, "[", "]")
+        if array_body is None:
+            return set()
+        names: set[str] = set()
+        for item in _split_javascript_bindings(array_body):
+            names.update(_javascript_binding_names(item))
+        return names
+    simple = _strip_javascript_type(binding)
+    match = re.match(r"^[A-Za-z_$][\w$]*", simple)
+    return {match.group(0)} if match else set()
+
+
+def _strip_javascript_default(text: str) -> str:
+    depth = 0
+    for index, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "=" and depth == 0:
+            return text[:index].strip()
+    return text.strip()
+
+
+def _strip_javascript_type(text: str) -> str:
+    name, value = _split_javascript_top_level_colon(text)
+    return name if value is not None else text
+
+
+def _split_javascript_top_level_colon(text: str) -> tuple[str, str | None]:
+    depth = 0
+    for index, char in enumerate(text):
+        if char in "([{<":
+            depth += 1
+        elif char in ")]}>":
+            depth = max(0, depth - 1)
+        elif char == ":" and depth == 0:
+            return text[:index].strip(), text[index + 1 :].strip()
+    return text.strip(), None
+
+
+def _javascript_balanced_binding_body(text: str, open_char: str, close_char: str) -> tuple[str | None, str]:
+    if not text.startswith(open_char):
+        return None, ""
+    depth = 0
+    for index, char in enumerate(text):
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return text[1:index], text[index + 1 :].strip()
+    return None, ""
 
 
 def _javascript_call_is_definition_name(body: str, call_match: re.Match[str]) -> bool:

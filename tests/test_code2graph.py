@@ -959,6 +959,43 @@ function main(first, flag) {
     )
 
 
+def test_typescript_destructured_parameters_shadow_project_functions(tmp_path: Path) -> None:
+    (tmp_path / "app.ts").write_text(
+        """
+function helper() {
+  return 1;
+}
+
+export const main = ({ helper, run: execute }: Props, [fallback]) => {
+  helper();
+  execute();
+  fallback();
+};
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_graph(tmp_path, "call").to_dict()
+
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:helper"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:execute"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["from"] == "js:function:app.ts:main" and edge["to"] == "js:call:fallback"
+        for edge in graph["edges"]
+    )
+    assert not any(
+        edge["from"] == "js:function:app.ts:main"
+        and edge["to"] == "js:function:app.ts:helper"
+        for edge in graph["edges"]
+    )
+
+
 def test_typescript_this_method_calls_resolve_to_same_file_methods(tmp_path: Path) -> None:
     (tmp_path / "service.ts").write_text(
         """
