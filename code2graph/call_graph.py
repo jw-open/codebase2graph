@@ -81,6 +81,7 @@ JS_CLASS_RE = re.compile(
     r"(?:\s+extends\s+(?P<base>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*))?[^{]*\{"
 )
 JS_DEFAULT_CLASS_RE = re.compile(r"^\s*export\s+default\s+class\s+(?P<name>[A-Za-z_$][\w$]*)\b", re.M)
+JS_ANONYMOUS_DEFAULT_CLASS_RE = re.compile(r"^\s*export\s+default\s+class\s*(?:extends\s+[^ {][^{]*)?\{", re.M)
 JS_NEW_INSTANCE_RE = re.compile(
     r"\b(?:(?:const|let|var)\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*new\s+"
     r"(?P<class>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(",
@@ -302,10 +303,14 @@ def _local_javascript_class_ids(rel: str, text: str) -> dict[str, str]:
     for match in JS_CLASS_RE.finditer(text):
         name = match.group("name")
         counts[name] = counts.get(name, 0) + 1
+    if _unique_anonymous_default_javascript_class_match(text):
+        counts["default"] = counts.get("default", 0) + 1
     return {name: f"js:class:{rel}:{name}" for name, count in counts.items() if count == 1}
 
 
 def _unique_javascript_class_match(text: str, name: str) -> re.Match[str] | None:
+    if name == "default":
+        return _unique_anonymous_default_javascript_class_match(text)
     matches = [match for match in JS_CLASS_RE.finditer(text) if match.group("name") == name]
     if len(matches) == 1:
         return matches[0]
@@ -313,7 +318,17 @@ def _unique_javascript_class_match(text: str, name: str) -> re.Match[str] | None
 
 
 def _default_javascript_class_names(text: str) -> set[str]:
-    return {match.group("name") for match in JS_DEFAULT_CLASS_RE.finditer(text)}
+    names = {match.group("name") for match in JS_DEFAULT_CLASS_RE.finditer(text)}
+    if _unique_anonymous_default_javascript_class_match(text):
+        names.add("default")
+    return names
+
+
+def _unique_anonymous_default_javascript_class_match(text: str) -> re.Match[str] | None:
+    matches = list(JS_ANONYMOUS_DEFAULT_CLASS_RE.finditer(text))
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def _javascript_function_name(match: re.Match[str]) -> str | None:
@@ -343,8 +358,7 @@ def _local_javascript_class_methods(
 ) -> dict[tuple[str, str], str]:
     class_counts: dict[str, int] = {}
     discovered: list[tuple[str, str]] = []
-    for class_match in JS_CLASS_RE.finditer(text):
-        class_name = class_match.group("name")
+    for class_name, class_match in _javascript_class_matches(text):
         class_counts[class_name] = class_counts.get(class_name, 0) + 1
         class_body = _javascript_braced_block(text, class_match.end() - 1)
         if class_body is None:
@@ -360,6 +374,14 @@ def _local_javascript_class_methods(
         if function_id and class_counts.get(class_name) == 1:
             methods[(class_name, method_name)] = function_id
     return methods
+
+
+def _javascript_class_matches(text: str) -> list[tuple[str, re.Match[str]]]:
+    matches = [(match.group("name"), match) for match in JS_CLASS_RE.finditer(text)]
+    anonymous_default_match = _unique_anonymous_default_javascript_class_match(text)
+    if anonymous_default_match:
+        matches.append(("default", anonymous_default_match))
+    return matches
 
 
 def _local_javascript_class_bases(text: str, known_classes: set[str]) -> dict[str, str]:
