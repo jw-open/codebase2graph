@@ -73,7 +73,13 @@ def summarize_graph(graph: dict[str, object]) -> dict[str, object]:
         "dangling_edge_count": dangling_edges,
         "isolated_node_count": len(isolated),
         "entrypoints": _entrypoints(nodes_by_id),
+        "workflow_start_nodes": _workflow_start_nodes(nodes_by_id),
         "high_fan_in": _ranked_nodes(nodes_by_id, incoming_counts),
+        "high_fan_in_functions": _ranked_nodes(
+            nodes_by_id,
+            incoming_counts,
+            kinds={"function", "method"},
+        ),
         "high_fan_out": _ranked_nodes(nodes_by_id, outgoing_counts),
         "isolated_modules": _isolated_modules(nodes_by_id, semantic_edge_node_ids),
     }
@@ -111,16 +117,38 @@ def _entrypoints(nodes_by_id: dict[str, dict[str, object]], limit: int = 12) -> 
     return sorted(entries, key=lambda item: (str(item.get("kind", "")), str(item.get("id", ""))))[:limit]
 
 
+def _workflow_start_nodes(nodes_by_id: dict[str, dict[str, object]], limit: int = 12) -> list[dict[str, object]]:
+    workflow_kinds = {
+        "ci_workflow",
+        "compose_service",
+        "make_target",
+        "npm_script",
+        "python_entrypoint",
+    }
+    starts: list[dict[str, object]] = []
+    for node_id, node in nodes_by_id.items():
+        attrs = node.get("attributes", {})
+        if isinstance(attrs, dict) and attrs.get("kind") in workflow_kinds:
+            starts.append(_node_summary(node_id, node))
+    return sorted(starts, key=lambda item: (str(item.get("kind", "")), str(item.get("id", ""))))[:limit]
+
+
 def _ranked_nodes(
     nodes_by_id: dict[str, dict[str, object]],
     counts: dict[str, int],
     limit: int = 8,
+    kinds: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    ranked = [
-        _node_summary(node_id, nodes_by_id[node_id], count=count)
-        for node_id, count in counts.items()
-        if count > 0 and node_id in nodes_by_id
-    ]
+    ranked = []
+    for node_id, count in counts.items():
+        if count <= 0 or node_id not in nodes_by_id:
+            continue
+        node = nodes_by_id[node_id]
+        attrs = node.get("attributes", {})
+        kind = str(attrs.get("kind", "unknown")) if isinstance(attrs, dict) else "unknown"
+        if kinds is not None and kind not in kinds:
+            continue
+        ranked.append(_node_summary(node_id, node, count=count))
     return sorted(ranked, key=lambda item: (-int(item["count"]), str(item["id"])))[:limit]
 
 
@@ -253,8 +281,12 @@ def build_iteration_prompt(
         f"{_top_counts(summary.get('edge_labels'))}\n\n"
         "## Entrypoints\n\n"
         f"{_top_nodes(summary.get('entrypoints'))}\n\n"
+        "## Workflow Start Nodes\n\n"
+        f"{_top_nodes(summary.get('workflow_start_nodes'))}\n\n"
         "## High Fan In\n\n"
         f"{_top_nodes(summary.get('high_fan_in'))}\n\n"
+        "## High Fan In Functions\n\n"
+        f"{_top_nodes(summary.get('high_fan_in_functions'))}\n\n"
         "## High Fan Out\n\n"
         f"{_top_nodes(summary.get('high_fan_out'))}\n\n"
         "## Isolated Modules\n\n"

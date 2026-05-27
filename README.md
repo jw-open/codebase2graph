@@ -172,7 +172,8 @@ Options:
                           (default: all)
   --output PATH           Write graph JSON to this file (default: stdout)
   --pretty                Pretty-print JSON output
-  --summary-output PATH   Write graph summary JSON (entrypoints, fan-in/out nodes)
+  --summary-output PATH   Write graph summary JSON (entrypoints, workflow start
+                          nodes, fan-in/out nodes, isolated modules)
   --update-existing PATH  Update an existing graph JSON in place
   --update-summary-output PATH
                           Write update diff summary JSON

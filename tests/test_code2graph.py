@@ -4282,7 +4282,9 @@ if __name__ == "__main__":
 
     assert any(node["id"] == "workflow:npm:start" for node in summary["entrypoints"])
     assert any(node["id"] == "workflow:python:app.py" for node in summary["entrypoints"])
+    assert any(node["id"] == "workflow:npm:start" for node in summary["workflow_start_nodes"])
     assert any(node["id"] == "py:function:app.py:helper" for node in summary["high_fan_in"])
+    assert any(node["id"] == "py:function:app.py:helper" for node in summary["high_fan_in_functions"])
     assert any(node["id"] == "file:notes.md" for node in summary["isolated_modules"])
 
 
@@ -4299,7 +4301,9 @@ def test_cli_writes_graph_summary_json(tmp_path: Path) -> None:
     assert code == 0
     summary = json.loads(summary_output.read_text(encoding="utf-8"))
     assert "high_fan_in" in summary
+    assert "high_fan_in_functions" in summary
     assert "high_fan_out" in summary
+    assert "workflow_start_nodes" in summary
     assert any(node["id"] == "workflow:npm:build" for node in summary["entrypoints"])
 
 
@@ -4670,6 +4674,8 @@ def test_iteration_prompt_includes_graph_health_and_tests(tmp_path: Path) -> Non
             "edge_labels": {"contains": 1, "calls": 1},
             "dangling_edge_count": 1,
             "isolated_node_count": 1,
+            "workflow_start_nodes": [],
+            "high_fan_in_functions": [],
         },
         previous_snapshot=tmp_path / "previous.json",
         previous_summary={
