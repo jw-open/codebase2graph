@@ -4185,7 +4185,7 @@ CREATE TABLE users (
     assert any(node["id"] == "db:column:users.email" for node in graph["nodes"])
 
 
-def test_cli_writes_ohwise_graph_json(tmp_path: Path) -> None:
+def test_cli_writes_graph_json(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text(
         json.dumps({"scripts": {"build": "tsc --noEmit"}}),
         encoding="utf-8",
@@ -4567,7 +4567,7 @@ The tradeoff is repeatable offline generation versus faster online traversal.
 
 ## Decision
 
-We will emit deterministic OhWise-compatible JSON and make graph database loading optional.
+We will emit deterministic standard graph JSON and make graph database loading optional.
 """,
         encoding="utf-8",
     )
@@ -4684,7 +4684,7 @@ def test_iteration_prompt_includes_graph_health_and_tests(tmp_path: Path) -> Non
     assert "Nodes: 3 (+1)" in prompt
     assert "Fix 1 dangling edges" in prompt
     assert "Review 1 isolated nodes" in prompt
-    assert "jw-open <176761431+jw-open@users.noreply.github.com>" in prompt
+    assert "Use your configured git identity" in prompt
 
 
 def test_loop_status_without_pid_is_not_running(tmp_path: Path, monkeypatch) -> None:

@@ -221,3 +221,7 @@ __marimo__/
 .code2graph-runs/
 examples/*.graph.json
 out/
+
+# Internal iteration files
+CODE2GRAPH_PROGRESS.md
+CODE2GRAPH_NEXT_PROMPT.md

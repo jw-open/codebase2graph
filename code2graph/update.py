@@ -23,7 +23,7 @@ class GraphUpdateSummary:
 
 
 def update_existing_graph(existing: dict[str, Any], fresh: dict[str, Any]) -> tuple[dict[str, Any], GraphUpdateSummary]:
-    """Update an OhWise graph with a freshly generated code2graph snapshot.
+    """Update an existing graph with a freshly generated code2graph snapshot.
 
     Node and edge ids are deterministic across runs, so the fresh graph is the
     source of truth for current code state. Existing node attributes that are not

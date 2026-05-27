@@ -239,7 +239,7 @@ def build_iteration_prompt(
     return (
         "# code2graph Next Iteration Prompt\n\n"
         "You are working only in the `code2graph` repository. Continue improving the code-to-graph generator for "
-        "OhWise-compatible context engineering graphs.\n\n"
+        "knowledge graphs for code repositories.\n\n"
         "## Current Snapshot\n\n"
         f"- Target repo: `{repo_path}`\n"
         f"- Graph type: `{graph_type}`\n"
@@ -268,8 +268,8 @@ def build_iteration_prompt(
         + "\n".join(f"{index}. {step}" for index, step in enumerate(next_steps, start=1))
         + "\n\n"
         "## Commit Discipline\n\n"
-        "- Use `jw-open <176761431+jw-open@users.noreply.github.com>`.\n"
-        "- Push to `jwpublic:jw-open/code2graph.git` `main`.\n"
+        "- Use your configured git identity for commits.\n"
+        "- Push to `origin main`.\n"
         "- Commit only source, tests, docs, and packaging changes that improve the tool.\n"
         "- Do not commit generated snapshots or timestamp-only progress updates.\n"
     )
@@ -310,9 +310,7 @@ def build_action_prompt(context_prompt: str, repo_root: Path) -> str:
 4. Run `python -m pytest -q` and fix any failures before committing.
 5. Commit ONLY source/test/doc/package files — never commit `.code2graph-runs/*.json`,
    `CODE2GRAPH_PROGRESS.md`, or `CODE2GRAPH_NEXT_PROMPT.md`.
-6. Use this git identity for commits:
-   - name: `jw-open`
-   - email: `176761431+jw-open@users.noreply.github.com`
+6. Use your configured git identity for commits.
 7. Push to `origin main`.
 
 ## Constraints

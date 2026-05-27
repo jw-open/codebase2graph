@@ -3,25 +3,63 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "code2graph"
+name = "codes2graph"
 version = "0.1.0"
-description = "Generate OhWise-compatible graph JSON from source code repositories."
+description = "Extract knowledge graphs from source code repositories. Rank relevant nodes with Personalized PageRank for LLM context. No LLM dependency — bring your own model."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-authors = [{ name = "jw-open" }]
-keywords = ["code-analysis", "graph", "knowledge-graph", "ohwise"]
+authors = [
+    { name = "jw-open", email = "176761431+jw-open@users.noreply.github.com" },
+]
+keywords = [
+    "code-analysis",
+    "knowledge-graph",
+    "graph",
+    "rag",
+    "retrieval-augmented-generation",
+    "llm",
+    "context-engineering",
+    "pagerank",
+    "static-analysis",
+    "python",
+    "ast",
+    "codebase",
+    "dependency-graph",
+]
 classifiers = [
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
 ]
 
+[project.urls]
+Homepage  = "https://github.com/jw-open/code2graph"
+Repository = "https://github.com/jw-open/code2graph"
+Issues    = "https://github.com/jw-open/code2graph/issues"
+Changelog = "https://github.com/jw-open/code2graph/blob/main/CHANGELOG.md"
+
 [project.scripts]
-code2graph = "code2graph.cli:main"
-code2graph-iterate = "code2graph.iterate:main"
-code2graph-loop = "code2graph.loop:main"
+codes2graph = "code2graph.cli:main"
+codes2graph-iterate = "code2graph.iterate:main"
+codes2graph-loop = "code2graph.loop:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["code2graph"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]

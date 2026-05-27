@@ -4,7 +4,7 @@
 
 Status: implemented.
 
-- OhWise-compatible graph JSON.
+- standard knowledge graph JSON.
 - Folder tree graph.
 - Python AST call graph.
 - JavaScript/TypeScript regex call graph.
@@ -24,7 +24,7 @@ Status: implemented.
 - Emit separate layered graph files plus a merged graph bundle.
 - Add graph summaries: hotspots, entrypoints, isolated modules, high-fan-in functions, and workflow start nodes.
 - Generate chunk manifests that map graph nodes to source snippets for context retrieval.
-- Add optional import into OhWise Knowledge API.
+- Add optional graph database export.
 
 ## Iteration 4: automated iteration runner
 
@@ -39,6 +39,6 @@ Status: partially implemented.
 - It writes tracked progress to `CODE2GRAPH_PROGRESS.md`.
 - It writes tracked next-loop context to `CODE2GRAPH_NEXT_PROMPT.md`.
 - It keeps large graph snapshots in ignored `.code2graph-runs/`.
-- It can commit and push progress using the `jw-open` identity when `--commit-push` is set.
+- It can commit and push progress using the configured git identity when `--commit-push` is set.
 - It can call a local report command for Discord/webhook integration.
 - It can run a test command each loop and include the output in the prompt.

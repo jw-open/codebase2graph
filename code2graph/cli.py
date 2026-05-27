@@ -11,7 +11,7 @@ from .update import update_existing_graph
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate OhWise-compatible graph JSON from a source repository.")
+    parser = argparse.ArgumentParser(description="Extract a knowledge graph from a source code repository.")
     parser.add_argument("repo", help="Repository path to analyze.")
     parser.add_argument(
         "--graph",
@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--update-existing",
         help=(
-            "Update an existing OhWise graph JSON file. When --output is omitted, "
+            "Update an existing graph JSON file. When --output is omitted, "
             "the existing file is updated in place."
         ),
     )

@@ -143,8 +143,8 @@ def _invoke_codex(action_prompt: str, workdir: Path, log_file: Path, *, codex_bi
 
 
 def _commit_and_push(repo_root: Path, message: str, paths: list[Path]) -> None:
-    _run(["git", "config", "user.name", "jw-open"], repo_root)
-    _run(["git", "config", "user.email", "176761431+jw-open@users.noreply.github.com"], repo_root)
+    # git identity is read from repo config or global git config
+    
     _run(["git", "add", *[str(path) for path in paths]], repo_root)
     diff = _run(["git", "diff", "--cached", "--quiet"], repo_root)
     if diff.returncode == 0:
@@ -277,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         default="python -m pytest -q",
         help="Optional shell command to run after graph generation. Use an empty string to skip.",
     )
-    parser.add_argument("--commit-push", action="store_true", help="Commit progress using jwpublic identity and push main.")
+    parser.add_argument("--commit-push", action="store_true", help="Commit progress and push to origin main.")
     parser.add_argument("--codex", action="store_true", help="Invoke Codex each loop to implement one source improvement.")
     parser.add_argument("--codex-bin", help="Path to the codex CLI. Defaults to PATH or ~/.npm-global/bin/codex.")
     parser.add_argument("--codex-timeout-seconds", type=int, default=900)
