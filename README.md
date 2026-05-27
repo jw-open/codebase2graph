@@ -1,8 +1,8 @@
 # code2graph
 
-[![PyPI version](https://img.shields.io/pypi/v/codes2graph.svg)](https://pypi.org/project/codes2graph/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/codes2graph.svg)](https://pypi.org/project/codes2graph/)
-[![Python](https://img.shields.io/pypi/pyversions/codes2graph.svg)](https://pypi.org/project/codes2graph/)
+[![PyPI version](https://img.shields.io/pypi/v/codebase2graph.svg)](https://pypi.org/project/codebase2graph/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/codebase2graph.svg)](https://pypi.org/project/codebase2graph/)
+[![Python](https://img.shields.io/pypi/pyversions/codebase2graph.svg)](https://pypi.org/project/codebase2graph/)
 [![CI](https://github.com/jw-open/code2graph/actions/workflows/ci.yml/badge.svg)](https://github.com/jw-open/code2graph/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -17,18 +17,18 @@
 ## Quick start
 
 ```bash
-pip install codes2graph
+pip install codebase2graph
 ```
 
 ```bash
 # Extract full graph from a repo
-codes2graph /path/to/repo --graph all --output repo.graph.json
+codebase2graph /path/to/repo --graph all --output repo.graph.json
 
 # Python call graph only
-codes2graph /path/to/repo --graph call --output calls.graph.json
+codebase2graph /path/to/repo --graph call --output calls.graph.json
 
 # With actionable summary
-codes2graph /path/to/repo --graph all \
+codebase2graph /path/to/repo --graph all \
   --output repo.graph.json \
   --summary-output repo.summary.json
 ```
@@ -72,10 +72,10 @@ The graph knows that `auth.login()` *calls* `db.query()`, which *imports* `conne
 | `all` | Merged graph from all applicable extractors |
 
 ```bash
-codes2graph /path/to/repo --graph call   --output call.graph.json
-codes2graph /path/to/repo --graph schema --output schema.graph.json
-codes2graph /path/to/repo --graph infra  --output infra.graph.json
-codes2graph /path/to/repo --graph all    --output full.graph.json
+codebase2graph /path/to/repo --graph call   --output call.graph.json
+codebase2graph /path/to/repo --graph schema --output schema.graph.json
+codebase2graph /path/to/repo --graph infra  --output infra.graph.json
+codebase2graph /path/to/repo --graph all    --output full.graph.json
 ```
 
 ---
@@ -83,7 +83,7 @@ codes2graph /path/to/repo --graph all    --output full.graph.json
 ## Installation
 
 ```bash
-pip install codes2graph
+pip install codebase2graph
 ```
 
 No extra dependencies required — all graph types work with the standard install.
@@ -161,7 +161,7 @@ json.dump(d, open("graph.json", "w"), indent=2)
 ## CLI reference
 
 ```
-codes2graph <repo> [options]
+codebase2graph <repo> [options]
 
 Arguments:
   repo                    Path to the repository root
@@ -184,7 +184,7 @@ Options:
 Rebuild a graph from the current repository state while preserving stable node IDs and custom attributes added outside `code2graph`:
 
 ```bash
-codes2graph /path/to/repo --graph all \
+codebase2graph /path/to/repo --graph all \
   --update-existing repo.graph.json \
   --update-summary-output repo.update.json
 ```

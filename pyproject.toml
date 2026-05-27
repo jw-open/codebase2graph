@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codes2graph"
+name = "codebase2graph"
 version = "0.1.0"
 description = "Extract knowledge graphs from source code repositories. Rank relevant nodes with Personalized PageRank for LLM context. No LLM dependency — bring your own model."
 readme = "README.md"
@@ -49,9 +49,9 @@ Issues    = "https://github.com/jw-open/code2graph/issues"
 Changelog = "https://github.com/jw-open/code2graph/blob/main/CHANGELOG.md"
 
 [project.scripts]
-codes2graph = "code2graph.cli:main"
-codes2graph-iterate = "code2graph.iterate:main"
-codes2graph-loop = "code2graph.loop:main"
+codebase2graph = "code2graph.cli:main"
+codebase2graph-iterate = "code2graph.iterate:main"
+codebase2graph-loop = "code2graph.loop:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["code2graph"]
