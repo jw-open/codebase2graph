@@ -6,6 +6,7 @@ from .android_graph import build_android_graph
 from .call_graph import build_call_graph
 from .decision_graph import build_decision_graph
 from .entity_graph import build_entity_graph
+from .feature_graph import build_feature_graph
 from .folder_graph import build_folder_graph
 from .infra_graph import build_infra_graph
 from .models import Graph
@@ -18,6 +19,7 @@ GRAPH_BUILDERS = {
     "folder": build_folder_graph,
     "call": build_call_graph,
     "entity": build_entity_graph,
+    "feature": build_feature_graph,
     "schema": build_schema_graph,
     "workflow": build_workflow_graph,
     "infra": build_infra_graph,

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codebase2graph"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extract knowledge graphs from source code repositories. Rank relevant nodes with Personalized PageRank for LLM context. No LLM dependency — bring your own model."
 readme = "README.md"
 requires-python = ">=3.10"

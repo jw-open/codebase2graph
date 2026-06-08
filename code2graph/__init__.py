@@ -5,5 +5,5 @@ from .models import Edge, Graph, Node
 
 __all__ = ["Edge", "Graph", "Node", "build_graph"]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
